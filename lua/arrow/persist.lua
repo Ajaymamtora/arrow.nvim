@@ -4,13 +4,64 @@ local config = require("arrow.config")
 local utils = require("arrow.utils")
 local git = require("arrow.git")
 
+local function calculate_position(position, width, height)
+	local screen_width = vim.o.columns
+	local screen_height = vim.o.lines
+
+	local row, col
+
+	if position == "centre" then
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-left" then
+		row = 1
+		col = 1
+	elseif position == "top-centre" then
+		row = 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-right" then
+		row = 1
+		col = screen_width - width - 1
+	elseif position == "middle-left" then
+		row = math.ceil((screen_height - height) / 2)
+		col = 1
+	elseif position == "middle-right" then
+		row = math.ceil((screen_height - height) / 2)
+		col = screen_width - width - 1
+	elseif position == "bottom-left" then
+		row = screen_height - height - 1
+		col = 1
+	elseif position == "bottom-centre" then
+		row = screen_height - height - 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "bottom-right" then
+		row = screen_height - height - 1
+		col = screen_width - width - 1
+	else
+		-- Default to centre if invalid position
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	end
+
+	-- Ensure positions are within bounds
+	row = math.max(1, math.min(row, screen_height - height - 1))
+	col = math.max(1, math.min(col, screen_width - width - 1))
+
+	return row, col
+end
+
 local function save_key()
 	if config.getState("global_bookmarks") == true then
 		return "global"
 	end
 
 	if config.getState("separate_by_branch") then
-		local branch = git.refresh_git_branch()
+		local branch = config.getState("current_branch")
+		
+		-- If we don't have a cached branch, try to get it safely
+		if not branch then
+			branch = git.get_git_branch()
+		end
 
 		if branch then
 			return utils.normalize_path_to_filename(config.getState("save_key_cached") .. "-" .. branch)
@@ -66,15 +117,16 @@ function M.remove(filename)
 end
 
 function M.toggle(filename)
-	git.refresh_git_branch()
-
 	filename = filename or utils.get_current_buffer_path()
 
 	local index = M.is_saved(filename)
+	local pathTail = vim.fn.fnamemodify(filename, ":t")
 	if index then
 		M.remove(filename)
+		vim.notify(string.format(" Removed %s from bookmarks", pathTail), vim.log.levels.INFO)
 	else
 		M.save(filename)
+		vim.notify(string.format(" Added %s to bookmarks", pathTail), vim.log.levels.INFO)
 	end
 	notify()
 end
@@ -147,8 +199,6 @@ function M.go_to(index)
 end
 
 function M.next()
-	git.refresh_git_branch()
-
 	local current_index = M.is_saved(utils.get_current_buffer_path())
 	local next_index
 
@@ -162,8 +212,6 @@ function M.next()
 end
 
 function M.previous()
-	git.refresh_git_branch()
-
 	local current_index = M.is_saved(utils.get_current_buffer_path())
 	local previous_index
 
@@ -179,8 +227,6 @@ function M.previous()
 end
 
 function M.open_cache_file()
-	git.refresh_git_branch()
-
 	local cache_path = cache_file_path()
 	local cache_content
 
@@ -202,11 +248,11 @@ function M.open_cache_file()
 
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, cache_content)
 
-	local width = math.min(80, vim.fn.winwidth(0) - 4)
-	local height = math.min(20, #cache_content + 2)
+	local ui_config = require("arrow.config").getState("ui")
+	local width = math.min(ui_config.max_width, vim.fn.winwidth(0) - ui_config.padding)
+	local height = math.min(ui_config.max_height, #cache_content + ui_config.padding)
 
-	local row = math.ceil((vim.o.lines - height) / 2)
-	local col = math.ceil((vim.o.columns - width) / 2)
+	local row, col = calculate_position(ui_config.position, width, height)
 
 	local border = config.getState("window").border
 
@@ -222,6 +268,8 @@ function M.open_cache_file()
 	}
 
 	local winid = vim.api.nvim_open_win(bufnr, true, opts)
+
+	utils.setup_auto_close(bufnr, winid)
 
 	local close_buffer = ":lua vim.api.nvim_win_close(" .. winid .. ", {force = true})<CR>"
 	vim.api.nvim_buf_set_keymap(bufnr, "n", "q", close_buffer, { noremap = true, silent = true })
@@ -239,15 +287,40 @@ function M.open_cache_file()
 		buffer = bufnr,
 		desc = "save cache buffer on leave",
 		callback = function()
-			local updated_content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-			vim.fn.writefile(updated_content, cache_path)
-			M.load_cache_file()
+			-- Only fire autocmd after entering vim
+			if vim.v.vim_did_enter == 1 then
+				local updated_content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+				vim.fn.writefile(updated_content, cache_path)
+				M.load_cache_file()
+			end
 		end,
 	})
 
 	vim.cmd("setlocal nu")
 
 	return bufnr, winid
+end
+
+function M.refresh_cache()
+	-- Refresh git branch and save key
+	git.refresh_git_branch()
+	config.setState("save_key_cached", config.getState("save_key")())
+
+	-- Reload global bookmarks
+	require("arrow.global_bookmarks").load_cache_file()
+
+	-- Reload local bookmarks
+	M.load_cache_file()
+
+	-- Refresh current buffer's bookmarks if applicable
+	local bufnr = vim.api.nvim_get_current_buf()
+	local buffer_persist = require("arrow.buffer_persist")
+	if vim.api.nvim_buf_is_valid(bufnr) then
+		buffer_persist.load_buffer_bookmarks(bufnr)
+	end
+
+	-- Notify any listeners
+	notify()
 end
 
 return M

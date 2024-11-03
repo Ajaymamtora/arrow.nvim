@@ -26,13 +26,16 @@ function M.setup(opts)
 
 	local default_mappings = {
 		edit = "e",
+		edit_global = "E",
 		delete_mode = "d",
 		clear_all_items = "C",
 		toggle = "s",
+		toggle_global = "S",
 		open_vertical = "v",
 		open_horizontal = "-",
 		quit = "q",
 		remove = "x",
+		remove_global = "X",
 		next_item = "]",
 		prev_item = "[",
 	}
@@ -86,9 +89,17 @@ function M.setup(opts)
 	config.setState("relative_path", opts.relative_path or false)
 	config.setState("separate_save_and_remove", opts.separate_save_and_remove or false)
 
-	config.setState("save_key", save_keys[opts.save_key] or save_keys.cwd)
 	config.setState("save_key_name", opts.save_key or "cwd")
-	config.setState("save_key_cached", config.getState("save_key")())
+	local save_key_func = save_keys[config.getState("save_key_name")] or save_keys.cwd
+	config.setState("save_key", save_key_func)
+
+	if config.getState("save_key_name") == "cwd" then
+		config.setState("save_key_cached", save_key_func())
+	else
+		save_key_func(function(path)
+			config.setState("save_key_cached", path)
+		end)
+	end
 
 	if leader_key then
 		vim.keymap.set("n", leader_key, ui.openMenu, { noremap = true, silent = true, nowait = true, desc = "Arrow File Mappings" })
@@ -183,23 +194,72 @@ function M.setup(opts)
 	config.setState("mappings", utils.join_two_keys_tables(default_mappings, opts.mappings or {}))
 	config.setState("full_path_list", utils.join_two_arrays(default_full_path_list, opts.full_path_list or {}))
 
+	-- Initialize current branch for branch-based bookmarks
+	if config.getState("separate_by_branch") then
+		vim.schedule(function()
+			git.refresh_git_branch_async(function(branch)
+				if branch then
+					config.setState("current_branch", branch)
+				end
+			end)
+		end)
+	end
+
 	persist.load_cache_file()
 
 	vim.api.nvim_create_augroup("arrow", { clear = true })
 
-	vim.api.nvim_create_autocmd({ "DirChanged", "SessionLoadPost" }, {
+	vim.api.nvim_create_autocmd({ "DirChanged" }, {
 		callback = function()
-			git.refresh_git_branch()
-			persist.load_cache_file()
-			config.setState("save_key_cached", config.getState("save_key")())
+			-- Use async git branch refresh and defer heavy operations
+			vim.schedule(function()
+				config.setState("save_key_cached", config.getState("save_key")())
+				git.refresh_git_branch_async(function()
+					persist.load_cache_file()
+				end)
+			end)
 		end,
 		desc = "load cache file on DirChanged",
 		group = "arrow",
 	})
 
-	vim.api.nvim_create_autocmd({ "BufReadPost" }, {
+	vim.api.nvim_create_autocmd({ "SessionLoadPost" }, {
 		callback = function()
-			buffer_persist.load_buffer_bookmarks()
+			-- Defer session load operations to avoid blocking startup
+			vim.schedule(function()
+				git.refresh_git_branch_async(function(branch)
+					if branch then
+						config.setState("current_branch", branch)
+					end
+					-- Update save_key_cached before loading cache to ensure correct file path
+					config.setState("save_key_cached", config.getState("save_key")())
+					persist.load_cache_file()
+				end)
+			end)
+		end,
+		desc = "load cache file on SessionLoadPost",
+		group = "arrow",
+	})
+
+	vim.api.nvim_create_autocmd({ "BufReadPost" }, {
+		callback = function(args)
+			-- Only load bookmarks for regular files, not temporary or special buffers
+			local bufnr = args.buf
+			if vim.bo[bufnr].buftype ~= "" or not vim.bo[bufnr].buflisted then
+				return
+			end
+			
+			local bufname = utils.safe_buf_get_name(bufnr)
+			if not bufname or bufname == "" or bufname:match("^%w+://") then
+				return -- Skip unnamed buffers and special protocols
+			end
+			
+			-- Defer bookmark loading to avoid blocking buffer read
+			vim.schedule(function()
+				if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+					buffer_persist.load_buffer_bookmarks(bufnr)
+				end
+			end)
 		end,
 		desc = "load current file cache",
 		group = "arrow",
@@ -209,7 +269,12 @@ function M.setup(opts)
 		pattern = "LazyLoad",
 		callback = function(data)
 			if data.data == "arrow.nvim" then
-				buffer_persist.load_buffer_bookmarks()
+				vim.schedule(function()
+					local bufnr = vim.api.nvim_get_current_buf()
+					if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
+						buffer_persist.load_buffer_bookmarks(bufnr)
+					end
+				end)
 			end
 		end,
 		desc = "load current file cache on lazy load",
@@ -218,5 +283,8 @@ function M.setup(opts)
 
 	commands.setup()
 end
+
+-- Export API for user callbacks
+M.api = require("arrow.api")
 
 return M

@@ -432,6 +432,8 @@ function M.openMenu(bufnr)
 
 	local win = vim.api.nvim_open_win(menuBuf, true, window_config)
 
+	utils.setup_auto_close(menuBuf, win)
+
 	local mappings = config.getState("mappings")
 
 	local separate_save_and_remove = config.getState("separate_save_and_remove")
