@@ -18,6 +18,7 @@ function M.setup(opts)
 	vim.cmd("highlight default link ArrowDeleteMode DiagnosticError")
 	-- Add new highlight group for global bookmarks
 	vim.cmd("highlight default link ArrowGlobalBookmark " .. (opts.global_bookmark_highlight or "Special"))
+	vim.cmd("highlight default link ArrowFilename " .. (opts.filename_highlight or "String"))
 
 	opts = opts or {}
 
@@ -51,6 +52,9 @@ function M.setup(opts)
 		style = "minimal",
 		border = "single",
 	}
+
+	-- Add filename_first to config (defaults to true if not specified)
+	config.setState("filename_first", opts.filename_first ~= false)
 
 	-- Add new settings
 	config.setState("global_bookmark", opts.global_bookmark)

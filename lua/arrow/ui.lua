@@ -116,6 +116,8 @@ end
 
 local function format_single_filename(full_path, show_icons, line_number, is_global)
 	local formatted_name = ""
+	local full_path_list = config.getState("full_path_list")
+	local filename_first = config.getState("filename_first") ~= false -- Default to true if not set
 
 	-- Special handling for global bookmarks
 	if is_global then
@@ -136,9 +138,19 @@ local function format_single_filename(full_path, show_icons, line_number, is_glo
 			-- Show full path for files outside home
 			formatted_name = abs_path
 		end
+
+		-- Apply filename_first formatting for global bookmarks if enabled
+		if filename_first then
+			local tail = vim.fn.fnamemodify(formatted_name, ":t")
+			local path = vim.fn.fnamemodify(formatted_name, ":h")
+			if path ~= "." then
+				formatted_name = tail .. " " .. path
+			else
+				formatted_name = tail
+			end
+		end
 	else
 		-- Original formatting for local bookmarks
-		local full_path_list = config.getState("full_path_list")
 		local tail = vim.fn.fnamemodify(full_path, ":t:r")
 		local tail_with_extension = vim.fn.fnamemodify(full_path, ":t")
 
@@ -156,13 +168,17 @@ local function format_single_filename(full_path, show_icons, line_number, is_glo
 				local location = vim.fn.fnamemodify(full_path, ":h:h")
 
 				if config.getState("always_show_path") then
-					formatted_name = string.format("%s . %s", folder_name .. "/", location)
+					if filename_first then
+						formatted_name = string.format("%s %s", folder_name .. "/", location)
+					else
+						formatted_name = string.format("%s . %s", folder_name .. "/", location)
+					end
 				else
 					formatted_name = string.format("%s", folder_name .. "/")
 				end
 			else
 				if config.getState("always_show_path") then
-					formatted_name = full_path .. " . /"
+					formatted_name = full_path .. (filename_first and " " or " . /")
 				else
 					formatted_name = full_path
 				end
@@ -177,7 +193,11 @@ local function format_single_filename(full_path, show_icons, line_number, is_glo
 				display_path = vim.fn.fnamemodify(full_path, ":h")
 			end
 
-			formatted_name = string.format("%s . %s", tail_with_extension, display_path)
+			if filename_first then
+				formatted_name = string.format("%s %s", tail_with_extension, display_path)
+			else
+				formatted_name = string.format("%s . %s", tail_with_extension, display_path)
+			end
 		end
 	end
 
@@ -193,6 +213,7 @@ end
 local function format_file_names(file_names)
 	local full_path_list = config.getState("full_path_list")
 	local formatted_names = {}
+	local filename_first = config.getState("filename_first") ~= false -- Default to true if not set
 
 	-- Table to store occurrences of file names (tail)
 	local name_occurrences = {}
@@ -234,24 +255,29 @@ local function format_file_names(file_names)
 			end
 
 			local path = vim.fn.fnamemodify(full_path, ":h")
-
 			local display_path = path
-
 			local splitted_path = vim.split(display_path, "/")
 
 			if #splitted_path > 1 then
 				local folder_name = splitted_path[#splitted_path]
-
 				local location = vim.fn.fnamemodify(full_path, ":h:h")
 
 				if #name_occurrences[folder_name] > 1 or config.getState("always_show_path") then
-					table.insert(formatted_names, string.format("%s . %s", folder_name .. "/", location))
+					if filename_first then
+						table.insert(formatted_names, string.format("%s %s", folder_name .. "/", location))
+					else
+						table.insert(formatted_names, string.format("%s . %s", folder_name .. "/", location))
+					end
 				else
 					table.insert(formatted_names, string.format("%s", folder_name .. "/"))
 				end
 			else
 				if config.getState("always_show_path") then
-					table.insert(formatted_names, full_path .. " . /")
+					if filename_first then
+						table.insert(formatted_names, full_path .. " /")
+					else
+						table.insert(formatted_names, full_path .. " . /")
+					end
 				else
 					table.insert(formatted_names, full_path)
 				end
@@ -270,7 +296,11 @@ local function format_file_names(file_names)
 				display_path = vim.fn.fnamemodify(full_path, ":h")
 			end
 
-			table.insert(formatted_names, string.format("%s . %s", tail_with_extension, display_path))
+			if filename_first then
+				table.insert(formatted_names, string.format("%s %s", tail_with_extension, display_path))
+			else
+				table.insert(formatted_names, string.format("%s . %s", tail_with_extension, display_path))
+			end
 		end
 	end
 
@@ -287,6 +317,7 @@ local function render_highlights(buffer)
 	local actionsMenu = getActionsMenu()
 	local mappings = config.getState("mappings")
 	local global_bookmarks = require("arrow.global_bookmarks").global_bookmarks
+	local filename_first = config.getState("filename_first") ~= false
 
 	vim.api.nvim_buf_clear_namespace(buffer, -1, 0, -1)
 	local menuBuf = buffer or vim.api.nvim_get_current_buf()
@@ -314,39 +345,57 @@ local function render_highlights(buffer)
 		else
 			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFileIndex", i, 3, 4)
 		end
-	end
 
-	-- Calculate starting positions for headers
-	-- Account for: Global header (1) + global bookmarks (or "no bookmarks" message)
-	local global_section_height = math.max(1, #global_bookmarks) -- At least 1 for "No global bookmarks"
-	local local_header_pos = 2 + global_section_height
-
-	-- Highlight section headers - always highlight both headers
-	vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowGlobalBookmark", 0, 3, -1)
-	vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowCurrentFile", local_header_pos, 3, -1)
-
-	-- Local bookmarks section
-	for i = 1, #fileNames do
-		if vim.b.arrow_current_mode == "delete_mode" then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowDeleteMode", local_header_pos + i, 3, 4)
-		else
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFileIndex", local_header_pos + i, 3, 4)
+		-- Highlight filename if filename_first is enabled
+		if filename_first then
+			local line = vim.api.nvim_buf_get_lines(menuBuf, i - 1, i, false)[1]
+			if line then
+				local space_pos = line:find(" ", 5) -- Start after index and icon
+				if space_pos then
+					vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFilename", i - 1, 5, space_pos - 1)
+				end
+			end
 		end
 	end
 
-	-- Calculate action menu start position
-	-- Account for: Local header (1) + local bookmarks (or "no bookmarks" message) + blank line (1)
-	local local_section_height = math.max(1, #fileNames) -- At least 1 for "No local bookmarks"
+	-- Calculate starting positions for headers
+	local global_section_height = math.max(1, #global_bookmarks)
+	local local_header_pos = 2 + global_section_height
+
+	-- Highlight section headers
+	vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowGlobalBookmark", 0, 3, -1)
+	vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowCurrentFile", local_header_pos, 3, -1)
+
+	-- Local bookmarks section with filename highlighting
+	for i = 1, #fileNames do
+		local line_pos = local_header_pos + i
+		if vim.b.arrow_current_mode == "delete_mode" then
+			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowDeleteMode", line_pos, 3, 4)
+		else
+			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFileIndex", line_pos, 3, 4)
+		end
+
+		-- Highlight filename if filename_first is enabled
+		if filename_first then
+			local line = vim.api.nvim_buf_get_lines(menuBuf, line_pos - 1, line_pos, false)[1]
+			if line then
+				local space_pos = line:find(" ", 5) -- Start after index and icon
+				if space_pos then
+					vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFilename", line_pos - 1, 5, space_pos - 1)
+				end
+			end
+		end
+	end
+
+	-- Action menu highlights remain the same
+	local local_section_height = math.max(1, #fileNames)
 	local action_start = local_header_pos + local_section_height + 2
 
-	-- Highlight action shortcuts
 	for i = 0, #actionsMenu - 1 do
 		local line = vim.api.nvim_buf_get_lines(menuBuf, action_start + i, action_start + i + 1, false)[1]
 		if line then
-			-- Always highlight the first character after the initial spaces
 			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowAction", action_start + i, 3, 4)
 
-			-- Highlight full delete mode line when active
 			if vim.b.arrow_current_mode == "delete_mode" and line:match(mappings.delete_mode .. " Delete mode") then
 				vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowDeleteMode", action_start + i, 0, -1)
 			end
