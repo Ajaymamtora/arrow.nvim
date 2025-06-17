@@ -264,9 +264,13 @@ function M.refresh_cache()
 	-- Reload local bookmarks
 	M.load_cache_file()
 
+	-- Clear the in-memory cache for all buffer-local bookmarks.
+	-- This forces them to be reloaded from the correct branch-specific cache file.
+	local buffer_persist = require("arrow.buffer_persist")
+	buffer_persist.clear_all_in_memory_bookmarks()
+
 	-- Refresh current buffer's bookmarks if applicable
 	local bufnr = vim.api.nvim_get_current_buf()
-	local buffer_persist = require("arrow.buffer_persist")
 	if vim.api.nvim_buf_is_valid(bufnr) then
 		buffer_persist.load_buffer_bookmarks(bufnr)
 	end
