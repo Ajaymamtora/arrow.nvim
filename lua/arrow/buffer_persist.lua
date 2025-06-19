@@ -3,6 +3,7 @@ local M = {}
 local config = require("arrow.config")
 local utils = require("arrow.utils")
 local json = require("arrow.json")
+local git = require("arrow.git") -- [[ ADDED: Required for getting branch info ]]
 
 local ns = vim.api.nvim_create_namespace("arrow_bookmarks")
 M.local_bookmarks = {}
@@ -22,8 +23,17 @@ function M.get_ns()
 	return ns
 end
 
+-- vvvvvvvv  MODIFIED FUNCTION vvvvvvvv
 function M.cache_file_path(filename)
 	local save_path = config.getState("save_path")()
+
+	-- If separating by branch, create and use a branch-specific subdirectory
+	if config.getState("separate_by_branch") then
+		local branch = git.get_git_branch()
+		if branch and branch ~= "" then
+			save_path = save_path .. "/" .. utils.normalize_path_to_filename(branch)
+		end
+	end
 
 	save_path = save_path:gsub("/$", "")
 
@@ -33,6 +43,7 @@ function M.cache_file_path(filename)
 
 	return save_path .. "/" .. save_key(filename)
 end
+-- ^^^^^^^^ END OF MODIFIED FUNCTION ^^^^^^^^
 
 function M.clear_buffer_ext_marks(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
@@ -42,90 +53,94 @@ function M.clear_buffer_ext_marks(bufnr)
 end
 
 function M.redraw_bookmarks(bufnr, result)
-  -- Get the total number of lines in the buffer
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
+	-- Get the total number of lines in the buffer
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
 
-  for i, res in ipairs(result) do
-    local indexes = config.getState("index_keys")
+	for i, res in ipairs(result) do
+		local indexes = config.getState("index_keys")
 
-    local line = res.line
+		local line = res.line
 
-    -- Skip invalid lines that are out of range
-    if line <= 0 or line > line_count then
-      -- Skip this bookmark as it's out of range
-      goto continue
-    end
+		-- Skip invalid lines that are out of range
+		if line <= 0 or line > line_count then
+			-- Skip this bookmark as it's out of range
+			goto continue
+		end
 
-    local id = vim.api.nvim_buf_set_extmark(bufnr, ns, line - 1, -1, {
-      sign_text = indexes:sub(i, i) .. "",
-      sign_hl_group = "ArrowBookmarkSign",
-      hl_mode = "combine",
-    })
+		local id = vim.api.nvim_buf_set_extmark(bufnr, ns, line - 1, -1, {
+			sign_text = indexes:sub(i, i) .. "",
+			sign_hl_group = "ArrowBookmarkSign",
+			hl_mode = "combine",
+		})
 
-    res.ext_id = id
+		res.ext_id = id
 
-    ::continue::
-  end
-  notify()
+		::continue::
+	end
+	notify()
 end
 
 function M.load_buffer_bookmarks(bufnr)
-  -- return if already loaded
-  if M.local_bookmarks[bufnr] ~= nil then
-    return
-  end
+	-- return if already loaded
+	if M.local_bookmarks[bufnr] ~= nil then
+		return
+	end
 
-  if
-    M.last_sync_bookmarks[bufnr] ~= nil and utils.table_comp(M.last_sync_bookmarks[bufnr], M.local_bookmarks[bufnr])
-  then
-    return
-  end
+	if
+		M.last_sync_bookmarks[bufnr] ~= nil and utils.table_comp(M.last_sync_bookmarks[bufnr], M.local_bookmarks[bufnr])
+	then
+		return
+	end
 
-  bufnr = bufnr or vim.api.nvim_get_current_buf()
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-  -- Use absolute path for consistency in cache file naming
-  local buffer_path = vim.api.nvim_buf_get_name(bufnr)
-  if buffer_path == "" then return end -- Don't process unnamed buffers
-  local absolute_buffer_path = vim.fn.fnamemodify(buffer_path, ":p")
-  local path = M.cache_file_path(absolute_buffer_path)
+	-- Use absolute path for consistency in cache file naming
+	local buffer_path = vim.api.nvim_buf_get_name(bufnr)
+	if buffer_path == "" then
+		return
+	end -- Don't process unnamed buffers
+	local absolute_buffer_path = vim.fn.fnamemodify(buffer_path, ":p")
+	local path = M.cache_file_path(absolute_buffer_path)
 
+	if vim.fn.filereadable(path) == 0 then
+		M.local_bookmarks[bufnr] = {}
+	else
+		-- Use vim.fn.readfile for potentially better handling of file reading
+		local read_ok, content_lines = pcall(vim.fn.readfile, path)
+		if not read_ok or not content_lines then
+			vim.notify("Arrow: Failed to read buffer bookmarks from: " .. path, vim.log.levels.ERROR)
+			M.local_bookmarks[bufnr] = {}
+			return
+		end
+		local content = table.concat(content_lines, "\n")
 
-  if vim.fn.filereadable(path) == 0 then
-    M.local_bookmarks[bufnr] = {}
-  else
-    -- Use vim.fn.readfile for potentially better handling of file reading
-    local read_ok, content_lines = pcall(vim.fn.readfile, path)
-    if not read_ok or not content_lines then
-        vim.notify("Arrow: Failed to read buffer bookmarks from: " .. path, vim.log.levels.ERROR)
-        M.local_bookmarks[bufnr] = {}
-        return
-    end
-    local content = table.concat(content_lines, "\n")
+		-- Handle empty file case explicitly
+		if content == "" then
+			M.local_bookmarks[bufnr] = {}
+			notify() -- Notify even if empty, e.g., for satellite
+			return
+		end
 
-    -- Handle empty file case explicitly
-    if content == "" then
-        M.local_bookmarks[bufnr] = {}
-        notify() -- Notify even if empty, e.g., for satellite
-        return
-    end
+		local success, result = pcall(json.decode, content)
+		if success then
+			M.local_bookmarks[bufnr] = result
 
-    local success, result = pcall(json.decode, content)
-    if success then
-      M.local_bookmarks[bufnr] = result
+			--[[ REMOVED THIS CALL: This was likely causing the issue during session load
+   -- Add this line to validate and update bookmarks before redrawing
+   M.update(bufnr)
+   --]]
 
-      --[[ REMOVED THIS CALL: This was likely causing the issue during session load
-      -- Add this line to validate and update bookmarks before redrawing
-      M.update(bufnr)
-      --]]
-
-      -- Redraw bookmarks based *only* on the loaded data initially
-      M.redraw_bookmarks(bufnr, M.local_bookmarks[bufnr])
-    else
-      vim.notify("Arrow: Failed to decode JSON bookmarks for " .. absolute_buffer_path .. "\nError: " .. tostring(result), vim.log.levels.ERROR)
-      M.local_bookmarks[bufnr] = {}
-    end
-  end
-  notify()
+			-- Redraw bookmarks based *only* on the loaded data initially
+			M.redraw_bookmarks(bufnr, M.local_bookmarks[bufnr])
+		else
+			vim.notify(
+				"Arrow: Failed to decode JSON bookmarks for " .. absolute_buffer_path .. "\nError: " .. tostring(result),
+				vim.log.levels.ERROR
+			)
+			M.local_bookmarks[bufnr] = {}
+		end
+	end
+	notify()
 end
 
 function M.sync_buffer_bookmarks(bufnr)
