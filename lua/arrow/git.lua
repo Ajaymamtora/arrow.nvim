@@ -16,6 +16,9 @@ end
 
 -- vvvvvvvv  MODIFIED FUNCTION vvvvvvvv
 function M.refresh_git_branch()
+	if vim.v.vim_did_enter ~= 1 then
+		return
+	end
 	if config.getState("separate_by_branch") then
 		local current_branch = config.getState("current_branch")
 		local new_branch = M.get_git_branch()
