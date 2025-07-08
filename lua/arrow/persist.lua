@@ -242,9 +242,12 @@ function M.open_cache_file()
 		buffer = bufnr,
 		desc = "save cache buffer on leave",
 		callback = function()
-			local updated_content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-			vim.fn.writefile(updated_content, cache_path)
-			M.load_cache_file()
+			-- Only fire autocmd after entering vim
+			if vim.v.vim_did_enter == 1 then
+				local updated_content = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+				vim.fn.writefile(updated_content, cache_path)
+				M.load_cache_file()
+			end
 		end,
 	})
 
