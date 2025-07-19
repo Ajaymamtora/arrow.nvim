@@ -9,6 +9,21 @@ local ns = vim.api.nvim_create_namespace("arrow_bookmarks")
 M.local_bookmarks = {}
 M.last_sync_bookmarks = {}
 
+-- Write coalescing - debounce file writes
+local write_timers = {}
+local write_delay = 100 -- ms
+
+local function debounced_write(bufnr, fn)
+	if write_timers[bufnr] then
+		write_timers[bufnr]:stop()
+	end
+	
+	write_timers[bufnr] = vim.defer_fn(function()
+		fn()
+		write_timers[bufnr] = nil
+	end, write_delay)
+end
+
 local function notify()
 	vim.api.nvim_exec_autocmds("User", {
 		pattern = "ArrowMarkUpdate",
@@ -21,6 +36,18 @@ end
 
 function M.get_ns()
 	return ns
+end
+
+function M.invalidate_buffer_cache(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	M.local_bookmarks[bufnr] = nil
+	M.last_sync_bookmarks[bufnr] = nil
+	
+	-- Cancel any pending writes for this buffer
+	if write_timers[bufnr] then
+		write_timers[bufnr]:stop()
+		write_timers[bufnr] = nil
+	end
 end
 
 -- vvvvvvvv  MODIFIED FUNCTION vvvvvvvv
@@ -81,18 +108,14 @@ function M.redraw_bookmarks(bufnr, result)
 end
 
 function M.load_buffer_bookmarks(bufnr)
-	-- return if already loaded
-	if M.local_bookmarks[bufnr] ~= nil then
-		return
-	end
-
-	if
-		M.last_sync_bookmarks[bufnr] ~= nil and utils.table_comp(M.last_sync_bookmarks[bufnr], M.local_bookmarks[bufnr])
-	then
-		return
-	end
-
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	
+	-- Return if already loaded and data hasn't changed
+	if M.local_bookmarks[bufnr] ~= nil then
+		if M.last_sync_bookmarks[bufnr] ~= nil and utils.table_comp(M.last_sync_bookmarks[bufnr], M.local_bookmarks[bufnr]) then
+			return
+		end
+	end
 
 	-- Use absolute path for consistency in cache file naming
 	local buffer_path = vim.api.nvim_buf_get_name(bufnr)
@@ -154,6 +177,61 @@ function M.sync_buffer_bookmarks(bufnr)
 		return
 	end
 
+	-- Use debounced write to avoid excessive I/O
+	debounced_write(bufnr, function()
+		if config.getState("per_buffer_config").sort_automatically then
+			table.sort(M.local_bookmarks[bufnr], function(a, b)
+				return a.line < b.line
+			end)
+		end
+
+		local buffer_file_name = vim.api.nvim_buf_get_name(bufnr)
+		if buffer_file_name == "" then
+			return false
+		end
+		
+		local path = M.cache_file_path(buffer_file_name)
+		local path_dir = vim.fn.fnamemodify(path, ":h")
+
+		if vim.fn.isdirectory(path_dir) == 0 then
+			vim.fn.mkdir(path_dir, "p")
+		end
+
+		local file = io.open(path, "w")
+
+		if file then
+			if M.local_bookmarks[bufnr] ~= nil and #M.local_bookmarks[bufnr] ~= 0 then
+				file:write(json.encode(M.local_bookmarks[bufnr]))
+			end
+			file:flush()
+			file:close()
+
+			M.last_sync_bookmarks[bufnr] = vim.deepcopy(M.local_bookmarks[bufnr])
+			notify()
+			return true
+		end
+
+		return false
+	end)
+end
+
+function M.sync_buffer_bookmarks_immediate(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+
+	-- Cancel any pending writes and write immediately
+	if write_timers[bufnr] then
+		write_timers[bufnr]:stop()
+		write_timers[bufnr] = nil
+	end
+
+	if
+		M.last_sync_bookmarks[bufnr]
+		and M.local_bookmarks[bufnr]
+		and utils.table_comp(M.last_sync_bookmarks[bufnr], M.local_bookmarks[bufnr])
+	then
+		return true
+	end
+
 	if config.getState("per_buffer_config").sort_automatically then
 		table.sort(M.local_bookmarks[bufnr], function(a, b)
 			return a.line < b.line
@@ -161,8 +239,11 @@ function M.sync_buffer_bookmarks(bufnr)
 	end
 
 	local buffer_file_name = vim.api.nvim_buf_get_name(bufnr)
+	if buffer_file_name == "" then
+		return false
+	end
+	
 	local path = M.cache_file_path(buffer_file_name)
-
 	local path_dir = vim.fn.fnamemodify(path, ":h")
 
 	if vim.fn.isdirectory(path_dir) == 0 then
@@ -178,7 +259,7 @@ function M.sync_buffer_bookmarks(bufnr)
 		file:flush()
 		file:close()
 
-		M.last_sync_bookmarks[bufnr] = M.local_bookmarks[bufnr]
+		M.last_sync_bookmarks[bufnr] = vim.deepcopy(M.local_bookmarks[bufnr])
 		notify()
 		return true
 	end

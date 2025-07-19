@@ -10,7 +10,7 @@ local function save_key()
 	end
 
 	if config.getState("separate_by_branch") then
-		local branch = git.refresh_git_branch()
+		local branch = config.getState("current_branch") or git.get_git_branch()
 
 		if branch then
 			return utils.normalize_path_to_filename(config.getState("save_key_cached") .. "-" .. branch)
@@ -66,8 +66,6 @@ function M.remove(filename)
 end
 
 function M.toggle(filename)
-	git.refresh_git_branch()
-
 	filename = filename or utils.get_current_buffer_path()
 
 	local index = M.is_saved(filename)
@@ -150,8 +148,6 @@ function M.go_to(index)
 end
 
 function M.next()
-	git.refresh_git_branch()
-
 	local current_index = M.is_saved(utils.get_current_buffer_path())
 	local next_index
 
@@ -165,8 +161,6 @@ function M.next()
 end
 
 function M.previous()
-	git.refresh_git_branch()
-
 	local current_index = M.is_saved(utils.get_current_buffer_path())
 	local previous_index
 
@@ -182,8 +176,6 @@ function M.previous()
 end
 
 function M.open_cache_file()
-	git.refresh_git_branch()
-
 	local cache_path = cache_file_path()
 	local cache_content
 

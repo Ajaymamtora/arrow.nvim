@@ -204,19 +204,53 @@ function M.setup(opts)
 
 	vim.api.nvim_create_augroup("arrow", { clear = true })
 
-	vim.api.nvim_create_autocmd({ "DirChanged", "SessionLoadPost" }, {
+	vim.api.nvim_create_autocmd({ "DirChanged" }, {
 		callback = function()
-			git.refresh_git_branch()
-			persist.load_cache_file()
-			config.setState("save_key_cached", config.getState("save_key")())
+			-- Use async git branch refresh and defer heavy operations
+			vim.schedule(function()
+				config.setState("save_key_cached", config.getState("save_key")())
+				git.refresh_git_branch_async(function()
+					persist.load_cache_file()
+				end)
+			end)
 		end,
 		desc = "load cache file on DirChanged",
 		group = "arrow",
 	})
 
-	vim.api.nvim_create_autocmd({ "BufReadPost" }, {
+	vim.api.nvim_create_autocmd({ "SessionLoadPost" }, {
 		callback = function()
-			buffer_persist.load_buffer_bookmarks()
+			-- Defer session load operations to avoid blocking startup
+			vim.schedule(function()
+				git.refresh_git_branch_async(function()
+					persist.load_cache_file()
+					config.setState("save_key_cached", config.getState("save_key")())
+				end)
+			end)
+		end,
+		desc = "load cache file on SessionLoadPost",
+		group = "arrow",
+	})
+
+	vim.api.nvim_create_autocmd({ "BufReadPost" }, {
+		callback = function(args)
+			-- Only load bookmarks for regular files, not temporary or special buffers
+			local bufnr = args.buf
+			if vim.bo[bufnr].buftype ~= "" or not vim.bo[bufnr].buflisted then
+				return
+			end
+			
+			local bufname = vim.api.nvim_buf_get_name(bufnr)
+			if bufname == "" or bufname:match("^%w+://") then
+				return -- Skip unnamed buffers and special protocols
+			end
+			
+			-- Defer bookmark loading to avoid blocking buffer read
+			vim.schedule(function()
+				if vim.api.nvim_buf_is_valid(bufnr) and vim.api.nvim_buf_is_loaded(bufnr) then
+					buffer_persist.load_buffer_bookmarks(bufnr)
+				end
+			end)
 		end,
 		desc = "load current file cache",
 		group = "arrow",
@@ -226,7 +260,12 @@ function M.setup(opts)
 		pattern = "LazyLoad",
 		callback = function(data)
 			if data.data == "arrow.nvim" then
-				buffer_persist.load_buffer_bookmarks()
+				vim.schedule(function()
+					local bufnr = vim.api.nvim_get_current_buf()
+					if vim.api.nvim_buf_is_valid(bufnr) and vim.bo[bufnr].buflisted then
+						buffer_persist.load_buffer_bookmarks(bufnr)
+					end
+				end)
 			end
 		end,
 		desc = "load current file cache on lazy load",
@@ -235,5 +274,8 @@ function M.setup(opts)
 
 	commands.setup()
 end
+
+-- Export API for user callbacks
+M.api = require("arrow.api")
 
 return M
