@@ -5,7 +5,7 @@ local utils = require("arrow.utils")
 local json = require("arrow.json")
 local git = require("arrow.git") -- [[ ADDED: Required for getting branch info ]]
 
-local ns = vim.api.nvim_create_namespace("arrow_bookmarks")
+local ns = nil -- Defer namespace creation until needed
 M.local_bookmarks = {}
 M.last_sync_bookmarks = {}
 
@@ -35,6 +35,9 @@ local function save_key(filename)
 end
 
 function M.get_ns()
+	if ns == nil then
+		ns = vim.api.nvim_create_namespace("arrow_bookmarks")
+	end
 	return ns
 end
 
@@ -75,7 +78,7 @@ end
 function M.clear_buffer_ext_marks(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
 	notify()
 end
 
@@ -94,7 +97,7 @@ function M.redraw_bookmarks(bufnr, result)
 			goto continue
 		end
 
-		local id = vim.api.nvim_buf_set_extmark(bufnr, ns, line - 1, -1, {
+		local id = vim.api.nvim_buf_set_extmark(bufnr, M.get_ns(), line - 1, -1, {
 			sign_text = indexes:sub(i, i) .. "",
 			sign_hl_group = "ArrowBookmarkSign",
 			hl_mode = "combine",
@@ -300,14 +303,14 @@ function M.clear(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 
 	M.local_bookmarks[bufnr] = {}
-	vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+	vim.api.nvim_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
 	M.sync_buffer_bookmarks(bufnr)
 end
 
 function M.update(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	local extmarks = vim.api.nvim_buf_get_extmarks(bufnr, ns, { 0, 0 }, { -1, -1 }, {})
+	local extmarks = vim.api.nvim_buf_get_extmarks(bufnr, M.get_ns(), { 0, 0 }, { -1, -1 }, {})
 
 	if M.local_bookmarks[bufnr] ~= nil then
 		for _, mark in ipairs(M.local_bookmarks[bufnr]) do
