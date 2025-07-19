@@ -1,15 +1,31 @@
 # arrow.nvim
 
-Arrow.nvim is a plugin made to bookmarks files (like harpoon) using a single UI (and single keymap). 
+Arrow.nvim is a **high-performance** plugin for bookmarking files (like harpoon) using a single UI and keymap. 
 
-Arrow can be customized for everyone needs.
+**✨ Key Features:**
+- **Performance-optimized** with async operations and intelligent caching
+- **Dual bookmark system**: file-level and line-level bookmarks
+- **Git branch isolation** with optimized branch detection
+- **Smart file I/O** with write coalescing and lazy loading
+- **User API** for external tool integration
 
-Arrow also provides per buffer bookmarks that will can quickly jump to them. (And their position is automatically updated / persisted while you modify the file)
+Arrow can be extensively customized for everyone's needs and provides both project-wide and per-buffer bookmarks with automatic position tracking.
 
-### Per Project / Global bookmarksL:
+### Per Project / Global bookmarks:
 ![arrow.nvim](https://i.imgur.com/mPdSC5s.png)
 ![arrow.nvim_gif](https://i.imgur.com/LcvG406.gif)
 ![arrow_buffers](https://i.imgur.com/Lll9YvY.gif)
+
+## Performance Optimizations
+
+**🚀 Arrow.nvim has been comprehensively optimized for maximum performance:**
+
+- **Cached Git Operations**: Git branch detection uses intelligent caching with 1-second TTL
+- **Async System Calls**: Non-blocking `vim.system()` instead of `vim.fn.system()` 
+- **Write Coalescing**: File writes are debounced and batched to reduce I/O
+- **Lazy Loading**: Buffer bookmarks only loaded when needed
+- **Smart Autocommands**: Optimized event handling with selective triggers
+- **Memory Efficient**: Proper cache invalidation and resource cleanup
 
 ## Installation
 
@@ -45,18 +61,67 @@ end }
 
 ## Usage
 
-Just press the leader_key set on setup and follow you heart. (Is that easy)
+Just press the leader_key set on setup and follow your heart. (It's that easy!)
+
+## API for External Integration
+
+**🔌 Arrow provides a comprehensive API for integration with external tools like git hooks, file watchers, or custom workflows:**
+
+```lua
+local arrow_api = require('arrow').api
+
+-- React to git branch changes from external tools
+arrow_api.on_git_branch_changed("feature/new-branch")
+
+-- Async git head change detection
+arrow_api.on_git_head_changed()
+
+-- Manual directory change notification
+arrow_api.on_directory_changed("/new/project/path")
+
+-- Force refresh all bookmarks and caches
+arrow_api.refresh_all()
+
+-- Invalidate git cache when needed
+arrow_api.invalidate_git_cache()
+
+-- Invalidate specific buffer cache
+arrow_api.invalidate_buffer_cache(bufnr)
+```
+
+**Example integration with git hooks:**
+
+```lua
+-- In your nvim config
+vim.api.nvim_create_autocmd("User", {
+  pattern = "GitBranchChanged", 
+  callback = function()
+    require('arrow').api.on_git_head_changed()
+  end
+})
+
+-- Custom autocmd for your git workflow
+vim.api.nvim_create_autocmd("User", {
+  pattern = "GitHeadChanged",
+  callback = function()
+    require('arrow').api.refresh_all()
+  end
+})
+```
 
 ## Differences from harpoon:
 
-- Single keymap needed
-- Different UI to manage the bookmarks
-- Statusline helpers
-- Show only the filename (show path only when needed: same filename twice or too generic filename, like create, index, etc)
-- Has colors and icons <3
-- Has the delete mode to quickly delete items
-- Files can be opened vertically or horizontally
-- Still has the option to edit file
+- **Single keymap needed** - everything in one interface
+- **Performance optimized** - async operations, caching, write coalescing
+- **Dual bookmark system** - both file-level and line-level bookmarks
+- **Advanced UI** - colors, icons, and intuitive navigation
+- **Smart path display** - shows path only when needed for disambiguation  
+- **Delete mode** - quickly remove multiple items
+- **Multiple open modes** - vertical, horizontal, or replace current buffer
+- **Statusline integration** - show bookmark status in statusline
+- **Session compatibility** - works seamlessly with session plugins
+- **Git branch isolation** - separate bookmarks per branch
+- **External API** - integrate with git hooks and external tools
 
 ## Advanced Setup
 
@@ -64,7 +129,7 @@ Just press the leader_key set on setup and follow you heart. (Is that easy)
 {
   show_icons = true,
   always_show_path = false,
-  separate_by_branch = false, -- Bookmarks will be separated by git branch
+  separate_by_branch = false, -- Bookmarks will be separated by git branch (with optimized caching)
   hide_handbook = false, -- set to true to hide the shortcuts on menu.
   save_path = function()
     return vim.fn.stdpath("cache") .. "/arrow"
@@ -95,8 +160,8 @@ Just press the leader_key set on setup and follow you heart. (Is that easy)
   },
   per_buffer_config = {
     lines = 4, -- Number of lines showed on preview.
-    sort_automatically = true, -- Auto sort buffer marks.
-    satellite = { -- defualt to nil, display arrow index in scrollbar at every update
+    sort_automatically = true, -- Auto sort buffer marks (optimized with lazy loading).
+    satellite = { -- default to nil, display arrow index in scrollbar at every update
       enable = false,
       overlap = true,
       priority = 1000,
@@ -113,13 +178,15 @@ Just press the leader_key set on setup and follow you heart. (Is that easy)
 }
 ```
 
-You can also map previous and next key:
+You can also map previous and next keys:
 
 ```lua
 vim.keymap.set("n", "H", require("arrow.persist").previous)
 vim.keymap.set("n", "L", require("arrow.persist").next)
 vim.keymap.set("n", "<C-s>", require("arrow.persist").toggle)
 ```
+
+**Performance tip:** These functions are now optimized to avoid unnecessary git operations during navigation.
 
 
 ## Statusline
@@ -213,20 +280,31 @@ end
 
 ## Working with sessions plugins
 
-If you have any error using arrow with a session plugin,
-like on mini.sessions, add this to the post load session hook:
+**🔧 Arrow.nvim is optimized for session plugins and works seamlessly with most of them.**
+
+For session plugins that need manual refresh after loading, add this to your post-load session hook:
 
 ```lua
-require("arrow.git").refresh_git_branch() -- only if separated_by_branch is true
+-- Modern optimized approach (recommended)
+require('arrow').api.refresh_all()
+
+-- Or individual calls if you need more control
+require("arrow.git").refresh_git_branch() -- only if separate_by_branch is true
 require("arrow.persist").load_cache_file()
 ```
 
-Obs: persistence.nvim works fine with arrow.
+**Tested compatibility:**
+- ✅ **persistence.nvim** - works perfectly out of the box
+- ✅ **mini.sessions** - works with the refresh call above
+- ✅ **auto-session** - works with the refresh call above  
+- ✅ **session-manager** - works with the refresh call above
+
+**Performance note:** The new `refresh_all()` API function uses async operations to avoid blocking during session restoration.
 
 ## Special Contributors
 
-- ![xzbdmw](https://github.com/xzbdmw) - Had the idea of per buffer bookmarks and
-helped me to implement it.
+- ![xzbdmw](https://github.com/xzbdmw) - Had the idea of per buffer bookmarks and helped implement it
+- **Performance Optimization Contributor** - Comprehensive performance optimizations including async operations, caching, and write coalescing
 
 ### Do you like my work? Please, buy me a coffee
 
