@@ -1,6 +1,7 @@
 local M = {}
 
 local config = require("arrow.config")
+local utils = require("arrow.utils")
 
 -- Cache for git operations
 local git_cache = {
@@ -119,7 +120,7 @@ function M.refresh_git_branch()
 					and vim.api.nvim_buf_is_loaded(bufnr)
 					and vim.bo[bufnr].buflisted
 				then
-					local bufname = vim.api.nvim_buf_get_name(bufnr)
+					local bufname = utils.safe_buf_get_name(bufnr)
 					if bufname and bufname ~= "" then
 						buffer_persist.invalidate_buffer_cache(bufnr)
 						buffer_persist.clear_buffer_ext_marks(bufnr)
@@ -159,7 +160,7 @@ function M.refresh_git_branch_async(callback)
 						and vim.api.nvim_buf_is_loaded(bufnr)
 						and vim.bo[bufnr].buflisted
 					then
-						local bufname = vim.api.nvim_buf_get_name(bufnr)
+						local bufname = utils.safe_buf_get_name(bufnr)
 						if bufname and bufname ~= "" then
 							buffer_persist.invalidate_buffer_cache(bufnr)
 							buffer_persist.clear_buffer_ext_marks(bufnr)

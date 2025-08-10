@@ -10,6 +10,85 @@ function M.log(...)
 	end
 end
 
+function M.safe_buf_call(bufnr, fn, ...)
+	local ok, result = pcall(fn, bufnr, ...)
+	if not ok then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Buffer operation failed for bufnr " .. tostring(bufnr) .. ": " .. tostring(result), vim.log.levels.DEBUG)
+		end
+		return nil
+	end
+	return result
+end
+
+function M.safe_buf_get_name(bufnr)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Invalid buffer " .. tostring(bufnr), vim.log.levels.DEBUG)
+		end
+		return nil
+	end
+	return M.safe_buf_call(bufnr, vim.api.nvim_buf_get_name)
+end
+
+function M.safe_buf_line_count(bufnr)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Invalid buffer for line count " .. tostring(bufnr), vim.log.levels.DEBUG)
+		end
+		return 0
+	end
+	return M.safe_buf_call(bufnr, vim.api.nvim_buf_line_count) or 0
+end
+
+function M.safe_buf_clear_namespace(bufnr, ns_id, start, end_line)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Invalid buffer for clear namespace " .. tostring(bufnr), vim.log.levels.DEBUG)
+		end
+		return false
+	end
+	local ok = pcall(vim.api.nvim_buf_clear_namespace, bufnr, ns_id, start, end_line)
+	if not ok and DEBUG_MODE then
+		vim.notify("Arrow: Failed to clear namespace for buffer " .. tostring(bufnr), vim.log.levels.DEBUG)
+	end
+	return ok
+end
+
+function M.safe_buf_set_extmark(bufnr, ns_id, line, col, opts)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Invalid buffer for set extmark " .. tostring(bufnr), vim.log.levels.DEBUG)
+		end
+		return nil
+	end
+	local ok, result = pcall(vim.api.nvim_buf_set_extmark, bufnr, ns_id, line, col, opts)
+	if not ok then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Failed to set extmark for buffer " .. tostring(bufnr) .. ": " .. tostring(result), vim.log.levels.DEBUG)
+		end
+		return nil
+	end
+	return result
+end
+
+function M.safe_buf_get_extmarks(bufnr, ns_id, start, end_pos, opts)
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Invalid buffer for get extmarks " .. tostring(bufnr), vim.log.levels.DEBUG)
+		end
+		return {}
+	end
+	local ok, result = pcall(vim.api.nvim_buf_get_extmarks, bufnr, ns_id, start, end_pos, opts)
+	if not ok then
+		if DEBUG_MODE then
+			vim.notify("Arrow: Failed to get extmarks for buffer " .. tostring(bufnr) .. ": " .. tostring(result), vim.log.levels.DEBUG)
+		end
+		return {}
+	end
+	return result
+end
+
 function M.table_comp(o1, o2)
 	local callList = {}
 
@@ -123,7 +202,10 @@ function M.get_current_buffer_path()
 end
 
 function M.get_buffer_path(bufnr)
-	local bufname = vim.fn.bufname(bufnr)
+	local bufname = M.safe_buf_get_name(bufnr)
+	if not bufname then
+		return nil
+	end
 	local absolute_buffer_path = vim.fn.fnamemodify(bufname, ":p")
 
 	local save_key = config.getState("save_key_cached") or config.getState("save_key")()

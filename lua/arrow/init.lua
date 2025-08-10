@@ -240,8 +240,8 @@ function M.setup(opts)
 				return
 			end
 			
-			local bufname = vim.api.nvim_buf_get_name(bufnr)
-			if bufname == "" or bufname:match("^%w+://") then
+			local bufname = utils.safe_buf_get_name(bufnr)
+			if not bufname or bufname == "" or bufname:match("^%w+://") then
 				return -- Skip unnamed buffers and special protocols
 			end
 			

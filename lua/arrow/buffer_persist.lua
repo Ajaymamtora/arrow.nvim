@@ -78,13 +78,13 @@ end
 function M.clear_buffer_ext_marks(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-	vim.api.nvim_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
+	utils.safe_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
 	notify()
 end
 
 function M.redraw_bookmarks(bufnr, result)
 	-- Get the total number of lines in the buffer
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
+	local line_count = utils.safe_buf_line_count(bufnr)
 
 	for i, res in ipairs(result) do
 		local indexes = config.getState("index_keys")
@@ -97,7 +97,7 @@ function M.redraw_bookmarks(bufnr, result)
 			goto continue
 		end
 
-		local id = vim.api.nvim_buf_set_extmark(bufnr, M.get_ns(), line - 1, -1, {
+		local id = utils.safe_buf_set_extmark(bufnr, M.get_ns(), line - 1, -1, {
 			sign_text = indexes:sub(i, i) .. "",
 			sign_hl_group = "ArrowBookmarkSign",
 			hl_mode = "combine",
@@ -121,8 +121,8 @@ function M.load_buffer_bookmarks(bufnr)
 	end
 
 	-- Use absolute path for consistency in cache file naming
-	local buffer_path = vim.api.nvim_buf_get_name(bufnr)
-	if buffer_path == "" then
+	local buffer_path = utils.safe_buf_get_name(bufnr)
+	if not buffer_path or buffer_path == "" then
 		return
 	end -- Don't process unnamed buffers
 	local absolute_buffer_path = vim.fn.fnamemodify(buffer_path, ":p")
@@ -188,8 +188,8 @@ function M.sync_buffer_bookmarks(bufnr)
 			end)
 		end
 
-		local buffer_file_name = vim.api.nvim_buf_get_name(bufnr)
-		if buffer_file_name == "" then
+		local buffer_file_name = utils.safe_buf_get_name(bufnr)
+		if not buffer_file_name or buffer_file_name == "" then
 			return false
 		end
 		
@@ -241,8 +241,8 @@ function M.sync_buffer_bookmarks_immediate(bufnr)
 		end)
 	end
 
-	local buffer_file_name = vim.api.nvim_buf_get_name(bufnr)
-	if buffer_file_name == "" then
+	local buffer_file_name = utils.safe_buf_get_name(bufnr)
+	if not buffer_file_name or buffer_file_name == "" then
 		return false
 	end
 	
@@ -303,14 +303,14 @@ function M.clear(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 
 	M.local_bookmarks[bufnr] = {}
-	vim.api.nvim_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
+	utils.safe_buf_clear_namespace(bufnr, M.get_ns(), 0, -1)
 	M.sync_buffer_bookmarks(bufnr)
 end
 
 function M.update(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local line_count = vim.api.nvim_buf_line_count(bufnr)
-	local extmarks = vim.api.nvim_buf_get_extmarks(bufnr, M.get_ns(), { 0, 0 }, { -1, -1 }, {})
+	local line_count = utils.safe_buf_line_count(bufnr)
+	local extmarks = utils.safe_buf_get_extmarks(bufnr, M.get_ns(), { 0, 0 }, { -1, -1 }, {})
 
 	if M.local_bookmarks[bufnr] ~= nil then
 		for _, mark in ipairs(M.local_bookmarks[bufnr]) do
