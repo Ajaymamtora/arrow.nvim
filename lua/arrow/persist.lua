@@ -10,7 +10,12 @@ local function save_key()
 	end
 
 	if config.getState("separate_by_branch") then
-		local branch = config.getState("current_branch") or git.get_git_branch()
+		local branch = config.getState("current_branch")
+		
+		-- If we don't have a cached branch, try to get it safely
+		if not branch then
+			branch = git.get_git_branch()
+		end
 
 		if branch then
 			return utils.normalize_path_to_filename(config.getState("save_key_cached") .. "-" .. branch)

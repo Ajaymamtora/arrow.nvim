@@ -59,7 +59,7 @@ function M.cache_file_path(filename)
 
 	-- If separating by branch, create and use a branch-specific subdirectory
 	if config.getState("separate_by_branch") then
-		local branch = git.get_git_branch()
+		local branch = config.getState("current_branch") or git.get_git_branch()
 		if branch and branch ~= "" then
 			save_path = save_path .. "/" .. utils.normalize_path_to_filename(branch)
 		end
