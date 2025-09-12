@@ -2,6 +2,52 @@ local M = {}
 
 local utils = require("arrow.utils")
 
+local function calculate_position(position, width, height)
+	local screen_width = vim.o.columns
+	local screen_height = vim.o.lines
+
+	local row, col
+
+	if position == "centre" then
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-left" then
+		row = 1
+		col = 1
+	elseif position == "top-centre" then
+		row = 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-right" then
+		row = 1
+		col = screen_width - width - 1
+	elseif position == "middle-left" then
+		row = math.ceil((screen_height - height) / 2)
+		col = 1
+	elseif position == "middle-right" then
+		row = math.ceil((screen_height - height) / 2)
+		col = screen_width - width - 1
+	elseif position == "bottom-left" then
+		row = screen_height - height - 1
+		col = 1
+	elseif position == "bottom-centre" then
+		row = screen_height - height - 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "bottom-right" then
+		row = screen_height - height - 1
+		col = screen_width - width - 1
+	else
+		-- Default to centre if invalid position
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	end
+
+	-- Ensure positions are within bounds
+	row = math.max(1, math.min(row, screen_height - height - 1))
+	col = math.max(1, math.min(col, screen_width - width - 1))
+
+	return row, col
+end
+
 M.global_bookmarks = {}
 
 function M.remove(index)
@@ -108,11 +154,11 @@ function M.open_cache_file()
 
 	vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, content)
 
-	local width = math.min(80, vim.fn.winwidth(0) - 4)
-	local height = math.min(20, #content + 2)
+	local ui_config = require("arrow.config").getState("ui")
+	local width = math.min(ui_config.max_width, vim.fn.winwidth(0) - ui_config.padding)
+	local height = math.min(ui_config.max_height, #content + ui_config.padding)
 
-	local row = math.ceil((vim.o.lines - height) / 2)
-	local col = math.ceil((vim.o.columns - width) / 2)
+	local row, col = calculate_position(ui_config.position, width, height)
 
 	local opts = {
 		style = "minimal",

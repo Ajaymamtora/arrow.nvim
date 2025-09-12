@@ -14,6 +14,52 @@ local current_index = 0
 
 M.dictionary = ""
 
+local function calculate_position(position, width, height)
+	local screen_width = vim.o.columns
+	local screen_height = vim.o.lines
+
+	local row, col
+
+	if position == "centre" then
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-left" then
+		row = 1
+		col = 1
+	elseif position == "top-centre" then
+		row = 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "top-right" then
+		row = 1
+		col = screen_width - width - 1
+	elseif position == "middle-left" then
+		row = math.ceil((screen_height - height) / 2)
+		col = 1
+	elseif position == "middle-right" then
+		row = math.ceil((screen_height - height) / 2)
+		col = screen_width - width - 1
+	elseif position == "bottom-left" then
+		row = screen_height - height - 1
+		col = 1
+	elseif position == "bottom-centre" then
+		row = screen_height - height - 1
+		col = math.ceil((screen_width - width) / 2)
+	elseif position == "bottom-right" then
+		row = screen_height - height - 1
+		col = screen_width - width - 1
+	else
+		-- Default to centre if invalid position
+		row = math.ceil((screen_height - height) / 2)
+		col = math.ceil((screen_width - width) / 2)
+	end
+
+	-- Ensure positions are within bounds
+	row = math.max(1, math.min(row, screen_height - height - 1))
+	col = math.max(1, math.min(col, screen_width - width - 1))
+
+	return row, col
+end
+
 local function is_key_in_mappings(key, mappings)
 	for _, mapping_key in pairs(mappings) do
 		if mapping_key == key then
@@ -558,6 +604,7 @@ function M.getWindowConfig()
 	local show_handbook = not (config.getState("hide_handbook"))
 	local parsedFileNames = format_file_names(fileNames)
 	local separate_save_and_remove = config.getState("separate_save_and_remove")
+	local ui_config = config.getState("ui")
 
 	-- Calculate max width needed for filenames
 	local max_width = 0
@@ -591,6 +638,9 @@ function M.getWindowConfig()
 		width = math.max(width, 35)
 	end
 
+	-- Apply max width constraint
+	width = math.min(width, ui_config.max_width)
+
 	-- Calculate base height for section headers and spacing
 	local height = 4 -- Start with: Global header (1) + Local header (1) + 2 spacer lines
 
@@ -617,12 +667,16 @@ function M.getWindowConfig()
 		end
 	end
 
+	-- Apply max height constraint
+	height = math.min(height, ui_config.max_height)
+
 	local current_config = {
 		width = width,
 		height = height,
-		row = math.ceil((vim.o.lines - height) / 2),
-		col = math.ceil((vim.o.columns - width) / 2),
 	}
+
+	-- Calculate position based on position preference
+	current_config.row, current_config.col = calculate_position(ui_config.position, width, height)
 
 	local res = vim.tbl_deep_extend("force", current_config, config.getState("window"))
 

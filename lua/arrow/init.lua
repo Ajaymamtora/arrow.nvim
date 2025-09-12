@@ -54,10 +54,18 @@ function M.setup(opts)
 		border = "single",
 	}
 
+	local default_ui_config = {
+		max_width = 80,
+		max_height = 20,
+		position = "centre",
+		padding = 2,
+	}
+
 	-- Add new settings
 	config.setState("global_bookmark", opts.global_bookmark)
 
 	config.setState("window", utils.join_two_keys_tables(default_window_config, opts.window or {}))
+	config.setState("ui", utils.join_two_keys_tables(default_ui_config, opts.ui or {}))
 
 	config.setState(
 		"per_buffer_config",

@@ -158,6 +158,12 @@ vim.api.nvim_create_autocmd("User", {
     col = "auto",
     border = "double",
   },
+  ui = { -- controls the appearance of bookmark windows (main menu, cache editors)
+    max_width = 80, -- maximum width of bookmark windows
+    max_height = 20, -- maximum height of bookmark windows
+    position = "centre", -- window position: "centre", "top-left", "top-centre", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-centre", "bottom-right"
+    padding = 2, -- padding around content in cache editor windows
+  },
   per_buffer_config = {
     lines = 4, -- Number of lines showed on preview.
     sort_automatically = true, -- Auto sort buffer marks (optimized with lazy loading).
