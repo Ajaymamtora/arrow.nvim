@@ -13,12 +13,18 @@ M.last_sync_bookmarks = {}
 local write_timers = {}
 local write_delay = 100 -- ms
 
-local function debounced_write(bufnr, fn)
+local function debounced_write(bufnr, buffer_file_name, fn)
 	if write_timers[bufnr] then
 		write_timers[bufnr]:stop()
 	end
-	
+
 	write_timers[bufnr] = vim.defer_fn(function()
+		if not vim.api.nvim_buf_is_valid(bufnr) then
+			local stat = vim.uv.fs_stat(buffer_file_name)
+			if not stat then
+				return
+			end
+		end
 		fn()
 		write_timers[bufnr] = nil
 	end, write_delay)
@@ -180,19 +186,19 @@ function M.sync_buffer_bookmarks(bufnr)
 		return
 	end
 
+	local buffer_file_name = utils.safe_buf_get_name(bufnr)
+	if not buffer_file_name or buffer_file_name == "" then
+		return false
+	end
+
 	-- Use debounced write to avoid excessive I/O
-	debounced_write(bufnr, function()
+	debounced_write(bufnr, buffer_file_name, function()
 		if config.getState("per_buffer_config").sort_automatically then
 			table.sort(M.local_bookmarks[bufnr], function(a, b)
 				return a.line < b.line
 			end)
 		end
 
-		local buffer_file_name = utils.safe_buf_get_name(bufnr)
-		if not buffer_file_name or buffer_file_name == "" then
-			return false
-		end
-		
 		local path = M.cache_file_path(buffer_file_name)
 		local path_dir = vim.fn.fnamemodify(path, ":h")
 
@@ -235,17 +241,24 @@ function M.sync_buffer_bookmarks_immediate(bufnr)
 		return true
 	end
 
+	local buffer_file_name = utils.safe_buf_get_name(bufnr)
+	if not buffer_file_name or buffer_file_name == "" then
+		return false
+	end
+
+	if not vim.api.nvim_buf_is_valid(bufnr) then
+		local stat = vim.uv.fs_stat(buffer_file_name)
+		if not stat then
+			return
+		end
+	end
+
 	if config.getState("per_buffer_config").sort_automatically then
 		table.sort(M.local_bookmarks[bufnr], function(a, b)
 			return a.line < b.line
 		end)
 	end
 
-	local buffer_file_name = utils.safe_buf_get_name(bufnr)
-	if not buffer_file_name or buffer_file_name == "" then
-		return false
-	end
-	
 	local path = M.cache_file_path(buffer_file_name)
 	local path_dir = vim.fn.fnamemodify(path, ":h")
 
