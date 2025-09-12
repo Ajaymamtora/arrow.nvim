@@ -205,6 +205,17 @@ function M.setup(opts)
 	config.setState("mappings", utils.join_two_keys_tables(default_mappings, opts.mappings or {}))
 	config.setState("full_path_list", utils.join_two_arrays(default_full_path_list, opts.full_path_list or {}))
 
+	-- Initialize current branch for branch-based bookmarks
+	if config.getState("separate_by_branch") then
+		vim.schedule(function()
+			git.refresh_git_branch_async(function(branch)
+				if branch then
+					config.setState("current_branch", branch)
+				end
+			end)
+		end)
+	end
+
 	persist.load_cache_file()
 
 	-- Load global bookmarks
@@ -230,9 +241,13 @@ function M.setup(opts)
 		callback = function()
 			-- Defer session load operations to avoid blocking startup
 			vim.schedule(function()
-				git.refresh_git_branch_async(function()
-					persist.load_cache_file()
+				git.refresh_git_branch_async(function(branch)
+					if branch then
+						config.setState("current_branch", branch)
+					end
+					-- Update save_key_cached before loading cache to ensure correct file path
 					config.setState("save_key_cached", config.getState("save_key")())
+					persist.load_cache_file()
 				end)
 			end)
 		end,
