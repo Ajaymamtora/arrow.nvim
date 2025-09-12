@@ -95,9 +95,17 @@ function M.setup(opts)
 	config.setState("relative_path", opts.relative_path or false)
 	config.setState("separate_save_and_remove", opts.separate_save_and_remove or false)
 
-	config.setState("save_key", save_keys[opts.save_key] or save_keys.cwd)
 	config.setState("save_key_name", opts.save_key or "cwd")
-	config.setState("save_key_cached", config.getState("save_key")())
+	local save_key_func = save_keys[config.getState("save_key_name")] or save_keys.cwd
+	config.setState("save_key", save_key_func)
+
+	if config.getState("save_key_name") == "cwd" then
+		config.setState("save_key_cached", save_key_func())
+	else
+		save_key_func(function(path)
+			config.setState("save_key_cached", path)
+		end)
+	end
 
 	if leader_key then
 		vim.keymap.set(

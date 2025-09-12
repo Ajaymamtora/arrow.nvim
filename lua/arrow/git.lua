@@ -58,18 +58,6 @@ function M.get_git_branch()
 		return git_cache.branch
 	end
 
-	-- As a fallback, try to get branch but wrapped in pcall to handle fast event context
-	local success, result = pcall(function()
-		return vim.fn.system({ "git", "symbolic-ref", "--short", "HEAD" })
-	end)
-
-	if success then
-		local branch = vim.trim(string.gsub(result, "\n", ""))
-		git_cache.branch = branch ~= "" and branch or nil
-		git_cache.branch_timestamp = get_current_time()
-		return git_cache.branch
-	end
-
 	-- If we can't get the branch due to fast event context, return nil
 	-- and schedule an async update for next time
 	vim.schedule(function()
