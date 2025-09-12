@@ -151,17 +151,20 @@ vim.api.nvim_create_autocmd("User", {
     split_vertical = function(target_file_name, current_file_name) end,
     split_horizontal = function(target_file_name, current_file_name) end,
   },
-  window = { -- controls the appearance and position of an arrow window (see nvim_open_win() for all options)
+  ui = { -- controls the appearance and behavior of all bookmark windows
+    -- Basic window options (passed to nvim_open_win)
+    relative = "editor",
     width = "auto",
     height = "auto",
     row = "auto",
     col = "auto",
-    border = "double",
-  },
-  ui = { -- controls the appearance of bookmark windows (main menu, cache editors)
+    style = "minimal",
+    border = "single",
+
+    -- UI customization options
     max_width = 80, -- maximum width of bookmark windows
     max_height = 20, -- maximum height of bookmark windows
-    position = "centre", -- window position: "centre", "top-left", "top-centre", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-centre", "bottom-right"
+    position = "center", -- window position: "center", "top-left", "top-center", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-center", "bottom-right"
     padding = 2, -- padding around content in cache editor windows
   },
   per_buffer_config = {

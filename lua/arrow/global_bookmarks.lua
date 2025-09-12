@@ -168,7 +168,7 @@ function M.open_cache_file()
 		row = row,
 		col = col,
 		focusable = true,
-		border = "single",
+		border = ui_config.border,
 	}
 
 	local winid = vim.api.nvim_open_win(bufnr, true, opts)

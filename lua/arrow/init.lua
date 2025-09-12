@@ -44,7 +44,8 @@ function M.setup(opts)
 		prev_item = "[",
 	}
 
-	local default_window_config = {
+	local default_ui_config = {
+		-- Window positioning and sizing
 		relative = "editor",
 		width = "auto",
 		height = "auto",
@@ -52,20 +53,24 @@ function M.setup(opts)
 		col = "auto",
 		style = "minimal",
 		border = "single",
-	}
 
-	local default_ui_config = {
+		-- UI customization
 		max_width = 80,
 		max_height = 20,
-		position = "centre",
+		position = "center",
 		padding = 2,
 	}
 
 	-- Add new settings
 	config.setState("global_bookmark", opts.global_bookmark)
 
-	config.setState("window", utils.join_two_keys_tables(default_window_config, opts.window or {}))
-	config.setState("ui", utils.join_two_keys_tables(default_ui_config, opts.ui or {}))
+	-- Merge window and ui configs for backward compatibility
+	local window_config = opts.window or {}
+	local ui_config = opts.ui or {}
+	local merged_ui_config = utils.join_two_keys_tables(default_ui_config, window_config)
+	merged_ui_config = utils.join_two_keys_tables(merged_ui_config, ui_config)
+
+	config.setState("ui", merged_ui_config)
 
 	config.setState(
 		"per_buffer_config",

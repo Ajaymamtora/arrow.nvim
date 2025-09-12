@@ -57,7 +57,7 @@ local function save_key()
 
 	if config.getState("separate_by_branch") then
 		local branch = config.getState("current_branch")
-		
+
 		-- If we don't have a cached branch, try to get it safely
 		if not branch then
 			branch = git.get_git_branch()
@@ -262,7 +262,7 @@ function M.open_cache_file()
 		row = row,
 		col = col,
 		focusable = true,
-		border = "single",
+		border = ui_config.border,
 	}
 
 	local winid = vim.api.nvim_open_win(bufnr, true, opts)

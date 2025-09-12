@@ -671,29 +671,44 @@ function M.getWindowConfig()
 	height = math.min(height, ui_config.max_height)
 
 	local current_config = {
+		relative = ui_config.relative,
+		style = ui_config.style,
 		width = width,
 		height = height,
+		border = ui_config.border,
 	}
 
 	-- Calculate position based on position preference
-	current_config.row, current_config.col = calculate_position(ui_config.position, width, height)
+	local calculated_row, calculated_col = calculate_position(ui_config.position, width, height)
 
-	local res = vim.tbl_deep_extend("force", current_config, config.getState("window"))
+	-- Apply overrides from ui_config for valid nvim_open_win keys only
+	local valid_keys = {
+		"relative", "win", "anchor", "width", "height", "bufpos", "row", "col",
+		"focusable", "mouse", "external", "zindex", "style", "border",
+		"title", "title_pos", "footer", "footer_pos", "noautocmd", "fixed", "hide"
+	}
 
-	if res.width == "auto" then
-		res.width = current_config.width
-	end
-	if res.height == "auto" then
-		res.height = current_config.height
-	end
-	if res.row == "auto" then
-		res.row = current_config.row
-	end
-	if res.col == "auto" then
-		res.col = current_config.col
+	for _, key in ipairs(valid_keys) do
+		if ui_config[key] ~= nil then
+			current_config[key] = ui_config[key]
+		end
 	end
 
-	return res
+	-- Handle auto values
+	if current_config.width == "auto" or current_config.width == nil then
+		current_config.width = width
+	end
+	if current_config.height == "auto" or current_config.height == nil then
+		current_config.height = height
+	end
+	if current_config.row == "auto" or current_config.row == nil then
+		current_config.row = calculated_row
+	end
+	if current_config.col == "auto" or current_config.col == nil then
+		current_config.col = calculated_col
+	end
+
+	return current_config
 end
 
 function M.openMenu(bufnr)
@@ -720,6 +735,7 @@ function M.openMenu(bufnr)
 
 	local menuBuf = createMenuBuffer(filename)
 	local window_config = M.getWindowConfig()
+
 	local win = vim.api.nvim_open_win(menuBuf, true, window_config)
 
 	utils.setup_auto_close(menuBuf, win)
