@@ -37,7 +37,7 @@ function M.setup(opts)
 		prev_item = "[",
 	}
 
-	local default_window_config = {
+	local default_ui_config = {
 		relative = "editor",
 		width = "auto",
 		height = "auto",
@@ -45,9 +45,12 @@ function M.setup(opts)
 		col = "auto",
 		style = "minimal",
 		border = "single",
+		max_width = 80,
+		max_height = 20,
+		position = "center",
 	}
 
-	config.setState("window", utils.join_two_keys_tables(default_window_config, opts.window or {}))
+	config.setState("ui", utils.join_two_keys_tables(default_ui_config, opts.ui or {}))
 
 	config.setState(
 		"per_buffer_config",

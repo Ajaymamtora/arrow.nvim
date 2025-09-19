@@ -345,6 +345,7 @@ function M.openFile(fileNumber)
 end
 
 function M.getWindowConfig()
+	local ui_config = config.getState("ui")
 	local show_handbook = not (config.getState("hide_handbook"))
 	local parsedFileNames = format_file_names(fileNames)
 	local separate_save_and_remove = config.getState("separate_save_and_remove")
@@ -372,39 +373,76 @@ function M.getWindowConfig()
 		end
 	end
 
-	local current_config = {
-		width = width,
-		height = height,
-		row = math.ceil((vim.o.lines - height) / 2),
-		col = math.ceil((vim.o.columns - width) / 2),
-	}
-
 	local is_empty = #vim.g.arrow_filenames == 0
 
 	if is_empty and show_handbook then
-		current_config.height = 5
-		current_config.width = 18
+		height = 5
+		width = 18
 	elseif is_empty then
-		current_config.height = 3
-		current_config.width = 18
+		height = 3
+		width = 18
 	end
 
-	local res = vim.tbl_deep_extend("force", current_config, config.getState("window"))
-
-	if res.width == "auto" then
-		res.width = current_config.width
+	-- Apply max dimensions
+	if ui_config.max_width and width > ui_config.max_width then
+		width = ui_config.max_width
 	end
-	if res.height == "auto" then
-		res.height = current_config.height
-	end
-	if res.row == "auto" then
-		res.row = current_config.row
-	end
-	if res.col == "auto" then
-		res.col = current_config.col
+	if ui_config.max_height and height > ui_config.max_height then
+		height = ui_config.max_height
 	end
 
-	return res
+	local win_width = vim.o.columns
+	local win_height = vim.o.lines
+
+	local row, col
+
+	-- Calculate position
+	local position = ui_config.position or "center"
+	if position == "center" then
+		row = math.floor((win_height - height) / 2)
+		col = math.floor((win_width - width) / 2)
+	elseif position == "top-left" then
+		row = 0
+		col = 0
+	elseif position == "top-center" then
+		row = 0
+		col = math.floor((win_width - width) / 2)
+	elseif position == "top-right" then
+		row = 0
+		col = win_width - width
+	elseif position == "middle-left" then
+		row = math.floor((win_height - height) / 2)
+		col = 0
+	elseif position == "middle-right" then
+		row = math.floor((win_height - height) / 2)
+		col = win_width - width
+	elseif position == "bottom-left" then
+		row = win_height - height
+		col = 0
+	elseif position == "bottom-center" then
+		row = win_height - height
+		col = math.floor((win_width - width) / 2)
+	elseif position == "bottom-right" then
+		row = win_height - height
+		col = win_width - width
+	else -- Default to center
+		row = math.floor((win_height - height) / 2)
+		col = math.floor((win_width - width) / 2)
+	end
+
+	local final_config = vim.deepcopy(ui_config)
+
+	final_config.width = (ui_config.width and ui_config.width ~= "auto") and ui_config.width or width
+	final_config.height = (ui_config.height and ui_config.height ~= "auto") and ui_config.height or height
+	final_config.row = (ui_config.row and ui_config.row ~= "auto") and ui_config.row or row
+	final_config.col = (ui_config.col and ui_config.col ~= "auto") and ui_config.col or col
+
+	-- Remove custom keys before passing to nvim_open_win
+	final_config.max_width = nil
+	final_config.max_height = nil
+	final_config.position = nil
+
+	return final_config
 end
 
 function M.openMenu(bufnr)

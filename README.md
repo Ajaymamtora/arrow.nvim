@@ -87,12 +87,20 @@ Just press the leader_key set on setup and follow you heart. (Is that easy)
     split_vertical = function(target_file_name, current_file_name) end,
     split_horizontal = function(target_file_name, current_file_name) end,
   },
-  window = { -- controls the appearance and position of an arrow window (see nvim_open_win() for all options)
+  ui = { -- controls the appearance and behavior of all bookmark windows
+    -- Basic window options (passed to nvim_open_win)
+    relative = "editor",
     width = "auto",
     height = "auto",
     row = "auto",
     col = "auto",
-    border = "double",
+    style = "minimal",
+    border = "single",
+
+    -- UI customization options
+    max_width = 80, -- maximum width of bookmark windows
+    max_height = 20, -- maximum height of bookmark windows
+    position = "center", -- window position: "center", "top-left", "top-center", "top-right", "middle-left", "middle-right", "bottom-left", "bottom-center", "bottom-right"
   },
   per_buffer_config = {
     lines = 4, -- Number of lines showed on preview.

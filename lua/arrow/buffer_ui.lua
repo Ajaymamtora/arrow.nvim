@@ -14,6 +14,85 @@ local current_highlight = nil
 local to_delete = {}
 local spawn_col = -1
 
+local function getWindowConfig(win_type, bookmarks)
+	local ui_config = config.getState("ui")
+	local width, height
+
+	if win_type == "actions" then
+		if #bookmarks == 0 then
+			width = 15
+			height = 2
+		else
+			width = 17
+			height = 4
+		end
+	else -- preview
+		width = math.ceil(vim.o.columns / 2)
+		height = config.getState("per_buffer_config").lines
+	end
+
+	-- Apply max dimensions
+	if ui_config.max_width and width > ui_config.max_width then
+		width = ui_config.max_width
+	end
+	if ui_config.max_height and height > ui_config.max_height then
+		height = ui_config.max_height
+	end
+
+	local win_width = vim.o.columns
+	local win_height = vim.o.lines
+
+	local row, col
+
+	-- Calculate position
+	local position = ui_config.position or "center"
+	if position == "center" then
+		row = math.floor((win_height - height) / 2)
+		col = math.floor((win_width - width) / 2)
+	elseif position == "top-left" then
+		row = 0
+		col = 0
+	elseif position == "top-center" then
+		row = 0
+		col = math.floor((win_width - width) / 2)
+	elseif position == "top-right" then
+		row = 0
+		col = win_width - width
+	elseif position == "middle-left" then
+		row = math.floor((win_height - height) / 2)
+		col = 0
+	elseif position == "middle-right" then
+		row = math.floor((win_height - height) / 2)
+		col = win_width - width
+	elseif position == "bottom-left" then
+		row = win_height - height
+		col = 0
+	elseif position == "bottom-center" then
+		row = win_height - height
+		col = math.floor((win_width - width) / 2)
+	elseif position == "bottom-right" then
+		row = win_height - height
+		col = win_width - width
+	else -- Default to center
+		row = math.floor((win_height - height) / 2)
+		col = math.floor((win_width - width) / 2)
+	end
+
+	local final_config = vim.deepcopy(ui_config)
+
+	final_config.width = (ui_config.width and ui_config.width ~= "auto") and ui_config.width or width
+	final_config.height = (ui_config.height and ui_config.height ~= "auto") and ui_config.height or height
+	final_config.row = (ui_config.row and ui_config.row ~= "auto") and ui_config.row or row
+	final_config.col = (ui_config.col and ui_config.col ~= "auto") and ui_config.col or col
+
+	-- Remove custom keys before passing to nvim_open_win
+	final_config.max_width = nil
+	final_config.max_height = nil
+	final_config.position = nil
+
+	return final_config
+end
+
 local function update_everything(bufnr)
 	persist.update(bufnr)
 	persist.clear_buffer_ext_marks(bufnr)
@@ -58,6 +137,7 @@ end
 
 function M.spawn_preview_window(buffer, index, bookmark, bookmark_count)
 	local lines_count = config.getState("per_buffer_config").lines
+	local window_config = getWindowConfig("preview", {})
 
 	local height = math.ceil((vim.o.lines - 4) / 2)
 
@@ -67,20 +147,14 @@ function M.spawn_preview_window(buffer, index, bookmark, bookmark_count)
 
 	local zindex = config.getState("buffer_mark_zindex")
 
-	local border = config.getState("window").border
-
 	lastRow = row
 	spawn_col = width
 
-	local window_config = {
-		height = lines_count,
-		width = width,
-		row = row,
-		col = math.ceil((vim.o.columns - width) / 2),
-		relative = "editor",
-		border = border,
-		zindex = zindex or 50,
-	}
+	window_config.height = lines_count
+	window_config.width = width
+	window_config.row = row
+	window_config.col = math.ceil((vim.o.columns - width) / 2)
+	window_config.zindex = zindex or 50
 
 	local displayIndex = config.getState("index_keys"):sub(index, index)
 
@@ -306,30 +380,11 @@ function M.spawn_action_windows(call_buffer, bookmarks, line_nr, col_nr, call_wi
 
 	local width = math.ceil(vim.o.columns / 2)
 
-	local border = config.getState("window").border
+	local window_config = getWindowConfig("actions", bookmarks)
 
-	local window_config
-
-	if #bookmarks == 0 then
-		window_config = {
-			height = 2,
-			width = 15,
-			row = math.ceil((vim.o.lines - 2) / 2),
-			col = math.ceil((vim.o.columns - 15) / 2),
-			style = "minimal",
-			relative = "editor",
-			border = border,
-		}
-	else
-		window_config = {
-			height = 4,
-			width = 17,
-			row = lastRow + lines_count + 2,
-			col = width - spawn_col / 2,
-			style = "minimal",
-			relative = "editor",
-			border = border,
-		}
+	if #bookmarks > 0 then
+		window_config.row = lastRow + lines_count + 2
+		window_config.col = math.ceil((vim.o.columns - window_config.width) / 2)
 	end
 
 	local hide_buffer_handbook = config.getState("hide_buffer_handbook")
