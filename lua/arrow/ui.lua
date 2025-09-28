@@ -6,444 +6,447 @@ local utils = require("arrow.utils")
 local git = require("arrow.git")
 local icons = require("arrow.integration.icons")
 
-local fileNames = {}
-local to_highlight = {}
+-- Model for the current menu render
+local menu_model = {
+	entries = {}, -- { line, key, filename, group = 'branch'|'global', icon_hl? }
+	lines = {}, -- strings for buffer
+	current_line = 0,
+	header = { -- line numbers for headers & underlines
+		global = { header = nil, underline = nil },
+		branch = { header = nil, underline = nil },
+	},
+}
 
-local current_index = 0
+-- ===== Helpers ==============================================================
 
-local function getActionsMenu()
-	local mappings = config.getState("mappings")
+local function is_letter(c)
+	return c:match("%a") ~= nil
+end
 
-	if #vim.g.arrow_filenames == 0 then
-		return {
-			string.format("%s Save File", mappings.toggle),
-		}
+local function build_reserved_keys()
+	local reserved = {}
+	local mappings = config.getState("mappings") or {}
+	for _, k in pairs(mappings) do
+		if type(k) == "string" and #k == 1 then
+			reserved[k] = true
+		end
 	end
+	local leader_key = config.getState("leader_key")
+	if type(leader_key) == "string" and #leader_key == 1 then
+		reserved[leader_key] = true
+	end
+	local buffer_leader_key = config.getState("buffer_leader_key")
+	if type(buffer_leader_key) == "string" and #buffer_leader_key == 1 then
+		reserved[buffer_leader_key] = true
+	end
+	-- keep these out of selection
+	reserved[" "] = true
+	reserved["\27"] = true -- <Esc>
+	reserved["-"] = true -- used by open_horizontal
+	-- Also reserve any user-defined *normal-mode* single-char mappings
+	for byte = 65, 90 do -- A..Z
+		local c = string.char(byte)
+		if vim.fn.maparg(c, "n") ~= "" then
+			reserved[c] = true
+		end
+	end
+	for byte = 97, 122 do -- a..z
+		local c = string.char(byte)
+		if vim.fn.maparg(c, "n") ~= "" then
+			reserved[c] = true
+		end
+	end
+	return reserved
+end
 
-	local already_saved = current_index > 0
-
-	local separate_save_and_remove = config.getState("separate_save_and_remove")
-
-	local return_mappings = {
-		string.format("%s Edit Arrow File", mappings.edit),
-		string.format("%s Clear All Items", mappings.clear_all_items),
-		string.format("%s Delete Mode", mappings.delete_mode),
-		string.format("%s Open Vertical", mappings.open_vertical),
-		string.format("%s Open Horizontal", mappings.open_horizontal),
-		string.format("%s Next Item", mappings.next_item),
-		string.format("%s Prev Item", mappings.prev_item),
-		string.format("%s Quit", mappings.quit),
+local function build_key_pools()
+	local reserved = build_reserved_keys()
+	local pools = {
+		digits = {},
+		letters = {},
 	}
 
-	if separate_save_and_remove then
-		table.insert(return_mappings, 1, string.format("%s Remove Current File", mappings.remove))
-		table.insert(return_mappings, 1, string.format("%s Save Current File", mappings.toggle))
-	else
-		if already_saved == true then
-			table.insert(return_mappings, 1, string.format("%s Remove Current File", mappings.toggle))
-		else
-			table.insert(return_mappings, 1, string.format("%s Save Current File", mappings.toggle))
+	-- Digits 1..9 for local (branch) first
+	for d = 1, 9 do
+		local c = tostring(d)
+		if not reserved[c] then
+			table.insert(pools.digits, c)
 		end
 	end
 
-	return return_mappings
+	-- Letters from index_keys but filtered to alphabetic & not reserved
+	local index_keys = config.getState("index_keys") or "123456789zxcbnmZXVBNM,afghjklAFGHJKLwrtyuiopWRTYUIOP"
+	for i = 1, #index_keys do
+		local c = index_keys:sub(i, i)
+		if is_letter(c) and not reserved[c] then
+			pools.letters[#pools.letters + 1] = c
+		end
+	end
+
+	return pools
 end
 
-local function format_file_names(file_names)
+local function format_names(file_names)
 	local full_path_list = config.getState("full_path_list")
 	local formatted_names = {}
+	local perm_lookup = vim.g.arrow_permanent_lookup or {}
+	local show_icons = config.getState("show_icons")
 
-	-- Table to store occurrences of file names (tail)
-	local name_occurrences = {}
-
+	-- occurrences for tail disambiguation
+	local occ = {}
 	for _, full_path in ipairs(file_names) do
-		local tail = vim.fn.fnamemodify(full_path, ":t:r") -- Get the file name without extension
-
+		local tail = vim.fn.fnamemodify(full_path, ":t:r")
 		if vim.fn.isdirectory(full_path) == 1 then
 			local parsed_path = full_path
-
 			if parsed_path:sub(#parsed_path, #parsed_path) == "/" then
 				parsed_path = parsed_path:sub(1, #parsed_path - 1)
 			end
-
 			local splitted_path = vim.split(parsed_path, "/")
-			local folder_name = splitted_path[#splitted_path]
-
-			if name_occurrences[folder_name] then
-				table.insert(name_occurrences[folder_name], full_path)
-			else
-				name_occurrences[folder_name] = { full_path }
-			end
+			local folder = splitted_path[#splitted_path]
+			occ[folder] = occ[folder] or {}
+			table.insert(occ[folder], full_path)
 		else
-			if not name_occurrences[tail] then
-				name_occurrences[tail] = { full_path }
-			else
-				table.insert(name_occurrences[tail], full_path)
-			end
+			occ[tail] = occ[tail] or {}
+			table.insert(occ[tail], full_path)
 		end
 	end
 
 	for _, full_path in ipairs(file_names) do
 		local tail = vim.fn.fnamemodify(full_path, ":t:r")
-		local tail_with_extension = vim.fn.fnamemodify(full_path, ":t")
+		local tail_with_ext = vim.fn.fnamemodify(full_path, ":t")
+		local perm_glyph = perm_lookup[full_path] and " " or ""
 
 		if vim.fn.isdirectory(full_path) == 1 then
 			if not (string.sub(full_path, #full_path, #full_path) == "/") then
 				full_path = full_path .. "/"
 			end
 
-			local path = vim.fn.fnamemodify(full_path, ":h")
-
-			local display_path = path
-
-			local splitted_path = vim.split(display_path, "/")
-
+			local splitted_path = vim.split(vim.fn.fnamemodify(full_path, ":h"), "/")
 			if #splitted_path > 1 then
 				local folder_name = splitted_path[#splitted_path]
-
 				local location = vim.fn.fnamemodify(full_path, ":h:h")
-
-				if #name_occurrences[folder_name] > 1 or config.getState("always_show_path") then
-					table.insert(formatted_names, string.format("%s . %s", folder_name .. "/", location))
+				if #occ[folder_name] > 1 or config.getState("always_show_path") then
+					table.insert(formatted_names, string.format("%s . %s%s", folder_name .. "/", location, perm_glyph))
 				else
-					table.insert(formatted_names, string.format("%s", folder_name .. "/"))
+					table.insert(formatted_names, string.format("%s%s", folder_name .. "/", perm_glyph))
 				end
 			else
 				if config.getState("always_show_path") then
-					table.insert(formatted_names, full_path .. " . /")
+					table.insert(formatted_names, full_path .. " . /" .. perm_glyph)
 				else
-					table.insert(formatted_names, full_path)
+					table.insert(formatted_names, full_path .. perm_glyph)
 				end
 			end
 		elseif
 			not (config.getState("always_show_path"))
-			and #name_occurrences[tail] == 1
+			and #occ[tail] == 1
 			and not (vim.tbl_contains(full_path_list, tail))
 		then
-			table.insert(formatted_names, tail_with_extension)
+			table.insert(formatted_names, tail_with_ext .. perm_glyph)
 		else
-			local path = vim.fn.fnamemodify(full_path, ":h")
-			local display_path = path
-
+			local display_path = vim.fn.fnamemodify(full_path, ":h")
 			if vim.tbl_contains(full_path_list, tail) then
 				display_path = vim.fn.fnamemodify(full_path, ":h")
 			end
-
-			table.insert(formatted_names, string.format("%s . %s", tail_with_extension, display_path))
+			table.insert(formatted_names, string.format("%s . %s%s", tail_with_ext, display_path, perm_glyph))
 		end
 	end
 
 	return formatted_names
 end
 
--- Function to close the menu and open the selected file
-local function closeMenu()
-	local win = vim.fn.win_getid()
-	vim.api.nvim_win_close(win, true)
-end
-
-local function renderBuffer(buffer)
-	vim.api.nvim_buf_set_option(buffer, "modifiable", true)
-
+-- Build the complete menu lines (sections) ===================================
+local function build_menu_model(filename_current_buf)
+	local model = {
+		entries = {},
+		lines = {},
+		current_line = 0,
+		header = {
+			global = { header = nil, underline = nil },
+			branch = { header = nil, underline = nil },
+		},
+	}
 	local show_icons = config.getState("show_icons")
-	local buf = buffer or vim.api.nvim_get_current_buf()
+
+	local branch_list = persist.get_branch_list()
+	local global_list = persist.get_permanent_list()
+
+	local formatted_branch = format_names(branch_list)
+	local formatted_global = format_names(global_list)
+
+	local pools = build_key_pools()
+	local digits_pool = pools.digits
+	local letters_pool = pools.letters
+
+	local function pop_digit()
+		return table.remove(digits_pool, 1)
+	end
+
+	local function pop_letter()
+		return table.remove(letters_pool, 1)
+	end
+
+	local function next_branch_key()
+		-- first 1..9 (digits), then letters
+		local kd = pop_digit()
+		if kd then
+			return kd
+		end
+		return pop_letter()
+	end
+
+	local function next_global_key()
+		-- letters only
+		return pop_letter()
+	end
+
+	-- Top padding
+	table.insert(model.lines, "")
+
+	-- Global section FIRST -----------------------------------------------------
+	table.insert(model.lines, "   Global bookmarks")
+	model.header.global.header = #model.lines
+	table.insert(model.lines, "   ----------------")
+	model.header.global.underline = #model.lines
+
+	if #global_list == 0 then
+		table.insert(model.lines, "   (none)")
+	else
+		for i, full_path in ipairs(global_list) do
+			local disp = formatted_global[i]
+			local key = next_global_key() or "?"
+
+			local rendered = "   " .. key .. " " .. disp
+			local entry = { line = #model.lines + 1, key = key, filename = full_path, group = "global" }
+
+			if show_icons then
+				local icon, hl_group = icons.get_file_icon(full_path)
+				rendered = "   " .. key .. " " .. icon .. " " .. disp
+				entry.icon_hl = hl_group
+			end
+
+			table.insert(model.lines, rendered)
+			table.insert(model.entries, entry)
+
+			local parsed_filename = full_path
+			if parsed_filename:sub(1, 2) == "./" then
+				parsed_filename = parsed_filename:sub(3)
+			end
+			if parsed_filename == filename_current_buf then
+				model.current_line = #model.lines
+			end
+		end
+	end
+
+	table.insert(model.lines, "") -- spacer
+
+	-- Branch (local) section SECOND -------------------------------------------
+	table.insert(model.lines, "   Local (branch) bookmarks")
+	model.header.branch.header = #model.lines
+	table.insert(model.lines, "   ------------------------")
+	model.header.branch.underline = #model.lines
+
+	if #branch_list == 0 then
+		table.insert(model.lines, "   (none)")
+	else
+		for i, full_path in ipairs(branch_list) do
+			local disp = formatted_branch[i]
+			local key = next_branch_key() or "?"
+
+			local rendered = "   " .. key .. " " .. disp
+			local entry = { line = #model.lines + 1, key = key, filename = full_path, group = "branch" }
+
+			if show_icons then
+				local icon, hl_group = icons.get_file_icon(full_path)
+				rendered = "   " .. key .. " " .. icon .. " " .. disp
+				entry.icon_hl = hl_group
+			end
+
+			table.insert(model.lines, rendered)
+			table.insert(model.entries, entry)
+
+			local parsed_filename = full_path
+			if parsed_filename:sub(1, 2) == "./" then
+				parsed_filename = parsed_filename:sub(3)
+			end
+			if parsed_filename == filename_current_buf then
+				model.current_line = #model.lines
+			end
+		end
+	end
+
+	return model
+end
+
+-- Build & return the actions “handbook” lines ================================
+
+local function build_actions_lines(filename_current)
+	local mappings = config.getState("mappings")
+	local separate_save_and_remove = config.getState("separate_save_and_remove")
+	local show_handbook = not (config.getState("hide_handbook"))
+
+	if not show_handbook then
+		return {}
+	end
+
+	local actions = {}
+	local already_saved = persist.is_saved(filename_current) ~= nil
+
+	if separate_save_and_remove then
+		table.insert(actions, string.format("%s Save Current File", mappings.toggle))
+		table.insert(actions, string.format("%s Remove Current File", mappings.remove))
+	else
+		if already_saved then
+			table.insert(actions, string.format("%s Remove Current File", mappings.toggle))
+		else
+			table.insert(actions, string.format("%s Save Current File", mappings.toggle))
+		end
+	end
+
+	local is_perm = persist.is_saved_permanent(filename_current) ~= nil
+	if is_perm then
+		table.insert(actions, string.format("%s Remove Permanent File", mappings.toggle_permanent or "P"))
+	else
+		table.insert(actions, string.format("%s Save Permanently", mappings.toggle_permanent or "P"))
+	end
+
+	table.insert(actions, string.format("%s Edit Arrow File", mappings.edit))
+	table.insert(actions, string.format("%s Clear All Items", mappings.clear_all_items))
+	table.insert(actions, string.format("%s Delete Mode", mappings.delete_mode))
+	table.insert(actions, string.format("%s Open Vertical", mappings.open_vertical))
+	table.insert(actions, string.format("%s Open Horizontal", mappings.open_horizontal))
+	table.insert(actions, string.format("%s Next Item", mappings.next_item))
+	table.insert(actions, string.format("%s Prev Item", mappings.prev_item))
+	table.insert(actions, string.format("%s Quit", mappings.quit))
+
 	local lines = { "" }
-
-	local formattedFleNames = format_file_names(fileNames)
-
-	to_highlight = {}
-	current_index = 0
-
-	for i, fileName in ipairs(formattedFleNames) do
-		local displayIndex = i
-
-		displayIndex = config.getState("index_keys"):sub(i, i)
-
-		vim.api.nvim_buf_add_highlight(buf, -1, "ArrowDeleteMode", i + 3, 0, -1)
-
-		local parsed_filename = fileNames[i]
-
-		if fileNames[i]:sub(1, 2) == "./" then
-			parsed_filename = fileNames[i]:sub(3)
-		end
-
-		if parsed_filename == vim.b[buf].filename then
-			current_index = i
-		end
-
-		vim.keymap.set("n", "" .. displayIndex, function()
-			M.openFile(i)
-		end, { noremap = true, silent = true, buffer = buf, nowait = true })
-
-		if show_icons then
-			local icon, hl_group = icons.get_file_icon(fileNames[i])
-
-			to_highlight[i] = hl_group
-
-			fileName = icon .. " " .. fileName
-		end
-
-		table.insert(lines, string.format("   %s %s", displayIndex, fileName))
+	for _, a in ipairs(actions) do
+		table.insert(lines, "   " .. a)
 	end
 
-	-- Add a separator
-	if #vim.g.arrow_filenames == 0 then
-		table.insert(lines, "   No files yet.")
-	end
-
-	table.insert(lines, "")
-
-	local actionsMenu = getActionsMenu()
-
-	-- Add actions to the menu
-	if not (config.getState("hide_handbook")) then
-		for _, action in ipairs(actionsMenu) do
-			table.insert(lines, "   " .. action)
-		end
-	end
-
-	table.insert(lines, "")
-
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-	vim.api.nvim_buf_set_option(buf, "modifiable", false)
-	vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+	return lines
 end
 
--- Function to create the menu buffer with a list format
-local function createMenuBuffer(filename)
-	local buf = vim.api.nvim_create_buf(false, true)
+-- Compute window size from FINAL content (no user width/height overrides) ----
 
-	vim.b[buf].filename = filename
-	vim.b[buf].arrow_current_mode = ""
-	renderBuffer(buf)
+local function compute_window_size(lines)
+	-- Width based on display width (icons, wide chars)
+	local width = 0
+	for _, l in ipairs(lines) do
+		local w = vim.fn.strdisplaywidth(l)
+		if w > width then
+			width = w
+		end
+	end
+	width = width + 2 -- small margin
 
-	return buf
+	-- Height is number of lines in content, plus +1 visual bottom pad
+	local desired = #lines + 1
+
+	-- Clamp to available editor space (leave tiny safety margin)
+	local avail_h = math.max(1, (vim.o.lines or desired) - 2)
+	local height = math.min(desired, avail_h)
+
+	return width, height
 end
 
-local function render_highlights(buffer)
-	local actionsMenu = getActionsMenu()
+-- ===== Rendering & Highlighting ============================================
+
+local function render_highlights(bufnr)
+	vim.api.nvim_buf_clear_namespace(bufnr, -1, 0, -1)
+
+	-- Highlight section headers & underlines
+	local h = menu_model.header or {}
+	if h.global and h.global.header then
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", h.global.header - 1, 0, -1)
+	end
+	if h.global and h.global.underline then
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", h.global.underline - 1, 0, -1)
+	end
+	if h.branch and h.branch.header then
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", h.branch.header - 1, 0, -1)
+	end
+	if h.branch and h.branch.underline then
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "Title", h.branch.underline - 1, 0, -1)
+	end
+
+	-- Highlight current file line (if any)
+	if menu_model.current_line > 0 then
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowCurrentFile", menu_model.current_line - 1, 0, -1)
+	end
+
+	-- Highlight the “index key” (3rd col) and icon groups on entries
+	for _, e in ipairs(menu_model.entries) do
+		vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowFileIndex", e.line - 1, 3, 4)
+		if e.icon_hl then
+			vim.api.nvim_buf_add_highlight(bufnr, -1, e.icon_hl, e.line - 1, 5, 8)
+		end
+	end
+
+	-- Highlight action area keys and current mode indicators
 	local mappings = config.getState("mappings")
 
-	vim.api.nvim_buf_clear_namespace(buffer, -1, 0, -1)
-	local menuBuf = buffer or vim.api.nvim_get_current_buf()
+	local line_count = vim.api.nvim_buf_line_count(bufnr)
+	for i = 1, line_count do
+		local line = vim.api.nvim_buf_get_lines(bufnr, i - 1, i, false)[1] or ""
 
-	vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowCurrentFile", current_index, 0, -1)
-
-	for i, _ in ipairs(fileNames) do
-		if vim.b.arrow_current_mode == "delete_mode" then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowDeleteMode", i, 3, 4)
-		else
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowFileIndex", i, 3, 4)
-		end
-	end
-
-	if config.getState("show_icons") then
-		for k, v in pairs(to_highlight) do
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, v, k, 5, 8)
-		end
-	end
-
-	for i = #fileNames + 3, #fileNames + #actionsMenu + 3 do
-		vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowAction", i - 1, 3, 4)
-	end
-
-	-- Find the line containing "d - Delete Mode"
-	local deleteModeLine = -1
-	local verticalModeLine = -1
-	local horizontalModelLine = -1
-
-	for i, action in ipairs(actionsMenu) do
-		if action:find(mappings.delete_mode .. " Delete Mode") then
-			deleteModeLine = i - 1
+		-- First token highlight on each handbook line
+		if line:match("^%s+[%w%p]%s") then
+			vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowAction", i - 1, 3, 4)
 		end
 
-		if action:find(mappings.open_vertical .. " Open Vertical") then
-			verticalModeLine = i - 1
+		-- Mode indicators
+		if line:find((mappings.delete_mode or "d") .. " Delete Mode", 1, true) then
+			if vim.b.arrow_current_mode == "delete_mode" then
+				vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowDeleteMode", i - 1, 0, -1)
+			end
+		elseif line:find((mappings.open_vertical or "v") .. " Open Vertical", 1, true) then
+			if vim.b.arrow_current_mode == "vertical_mode" then
+				vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowAction", i - 1, 0, -1)
+			end
+		elseif line:find((mappings.open_horizontal or "-") .. " Open Horizontal", 1, true) then
+			if vim.b.arrow_current_mode == "horizontal_mode" then
+				vim.api.nvim_buf_add_highlight(bufnr, -1, "ArrowAction", i - 1, 0, -1)
+			end
 		end
-
-		if action:find(mappings.open_horizontal .. " Open Horizontal") then
-			horizontalModelLine = i - 1
-		end
-	end
-
-	if deleteModeLine >= 0 then
-		if vim.b.arrow_current_mode == "delete_mode" then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowDeleteMode", #fileNames + deleteModeLine + 2, 0, -1)
-		end
-	end
-
-	if verticalModeLine >= 0 then
-		if vim.b.arrow_current_mode == "vertical_mode" then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowAction", #fileNames + verticalModeLine + 2, 0, -1)
-		end
-	end
-
-	if horizontalModelLine >= 0 then
-		if vim.b.arrow_current_mode == "horizontal_mode" then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowAction", #fileNames + horizontalModelLine + 2, 0, -1)
-		end
-	end
-
-	local pattern = " %. .-$"
-	local line_number = 1
-
-	while line_number <= #fileNames + 1 do
-		local line_content = vim.api.nvim_buf_get_lines(menuBuf, line_number - 1, line_number, false)[1]
-
-		local match_start, match_end = string.find(line_content, pattern)
-		if match_start then
-			vim.api.nvim_buf_add_highlight(menuBuf, -1, "ArrowAction", line_number - 1, match_start - 1, match_end)
-		end
-
-		line_number = line_number + 1
 	end
 end
 
--- Function to open the selected file
-function M.openFile(fileNumber)
-	local fileName = vim.g.arrow_filenames[fileNumber]
+local function closeMenu()
+	local win = vim.fn.win_getid()
+	if win ~= 0 and vim.api.nvim_win_is_valid(win) then
+		vim.api.nvim_win_close(win, true)
+	end
+end
 
-	if vim.b.arrow_current_mode == "delete_mode" then
-		persist.remove(fileName)
+local function open_target(fileName)
+	local action
 
-		fileNames = vim.g.arrow_filenames
+	fileName = vim.fn.fnameescape(fileName)
 
-		renderBuffer(vim.api.nvim_get_current_buf())
-		render_highlights(vim.api.nvim_get_current_buf())
+	if vim.b.arrow_current_mode == "" or not vim.b.arrow_current_mode then
+		action = config.getState("open_action")
+	elseif vim.b.arrow_current_mode == "vertical_mode" then
+		action = config.getState("vertical_action")
+	elseif vim.b.arrow_current_mode == "horizontal_mode" then
+		action = config.getState("horizontal_action")
+	end
+
+	closeMenu()
+	vim.api.nvim_exec_autocmds("User", { pattern = "ArrowOpenFile" })
+
+	if
+		config.getState("global_bookmarks") == true
+		or config.getState("save_key_name") == "cwd"
+		or config.getState("save_key_name") == "git_root_bare"
+	then
+		action(fileName, vim.b.filename)
 	else
-		if not fileName then
-			print("Invalid file number")
-
-			return
-		end
-
-		local action
-
-		fileName = vim.fn.fnameescape(fileName)
-
-		if vim.b.arrow_current_mode == "" or not vim.b.arrow_current_mode then
-			action = config.getState("open_action")
-		elseif vim.b.arrow_current_mode == "vertical_mode" then
-			action = config.getState("vertical_action")
-		elseif vim.b.arrow_current_mode == "horizontal_mode" then
-			action = config.getState("horizontal_action")
-		end
-
-		closeMenu()
-		vim.api.nvim_exec_autocmds("User", { pattern = "ArrowOpenFile" })
-
-		if
-			config.getState("global_bookmarks") == true
-			or config.getState("save_key_name") == "cwd"
-			or config.getState("save_key_name") == "git_root_bare"
-		then
-			action(fileName, vim.b.filename)
-		else
-			action(config.getState("save_key_cached") .. "/" .. fileName, vim.b.filename)
-		end
+		action(config.getState("save_key_cached") .. "/" .. fileName, vim.b.filename)
 	end
 end
 
-function M.getWindowConfig()
-	local ui_config = config.getState("ui")
-	local show_handbook = not (config.getState("hide_handbook"))
-	local parsedFileNames = format_file_names(fileNames)
-	local separate_save_and_remove = config.getState("separate_save_and_remove")
-
-	local max_width = 0
-	if show_handbook then
-		max_width = 13
-		if separate_save_and_remove then
-			max_width = max_width + 2
-		end
-	end
-	for _, v in pairs(parsedFileNames) do
-		if #v > max_width then
-			max_width = #v
-		end
-	end
-
-	local width = max_width + 12
-	local height = #fileNames + 2
-
-	if show_handbook then
-		height = height + 10
-		if separate_save_and_remove then
-			height = height + 1
-		end
-	end
-
-	local is_empty = #vim.g.arrow_filenames == 0
-
-	if is_empty and show_handbook then
-		height = 5
-		width = 18
-	elseif is_empty then
-		height = 3
-		width = 18
-	end
-
-	-- Apply max dimensions
-	if ui_config.max_width and width > ui_config.max_width then
-		width = ui_config.max_width
-	end
-	if ui_config.max_height and height > ui_config.max_height then
-		height = ui_config.max_height
-	end
-
-	local win_width = vim.o.columns
-	local win_height = vim.o.lines
-
-	local row, col
-
-	-- Calculate position
-	local position = ui_config.position or "center"
-	if position == "center" then
-		row = math.floor((win_height - height) / 2)
-		col = math.floor((win_width - width) / 2)
-	elseif position == "top-left" then
-		row = 0
-		col = 0
-	elseif position == "top-center" then
-		row = 0
-		col = math.floor((win_width - width) / 2)
-	elseif position == "top-right" then
-		row = 0
-		col = win_width - width
-	elseif position == "middle-left" then
-		row = math.floor((win_height - height) / 2)
-		col = 0
-	elseif position == "middle-right" then
-		row = math.floor((win_height - height) / 2)
-		col = win_width - width
-	elseif position == "bottom-left" then
-		row = win_height - height
-		col = 0
-	elseif position == "bottom-center" then
-		row = win_height - height
-		col = math.floor((win_width - width) / 2)
-	elseif position == "bottom-right" then
-		row = win_height - height
-		col = win_width - width
-	else -- Default to center
-		row = math.floor((win_height - height) / 2)
-		col = math.floor((win_width - width) / 2)
-	end
-
-	local final_config = vim.deepcopy(ui_config)
-
-	final_config.width = (ui_config.width and ui_config.width ~= "auto") and ui_config.width or width
-	final_config.height = (ui_config.height and ui_config.height ~= "auto") and ui_config.height or height
-	final_config.row = (ui_config.row and ui_config.row ~= "auto") and ui_config.row or row
-	final_config.col = (ui_config.col and ui_config.col ~= "auto") and ui_config.col or col
-
-	-- Remove custom keys before passing to nvim_open_win
-	final_config.max_width = nil
-	final_config.max_height = nil
-	final_config.position = nil
-
-	return final_config
-end
+-- ===== Public UI ============================================================
 
 function M.openMenu(bufnr)
 	git.refresh_git_branch()
@@ -454,35 +457,117 @@ function M.openMenu(bufnr)
 		persist.load_cache_file()
 	end
 
-	to_highlight = {}
-	fileNames = vim.g.arrow_filenames
 	local filename
-
 	if config.getState("global_bookmarks") == true then
 		filename = vim.fn.expand("%:p")
 	else
 		filename = utils.get_current_buffer_path()
 	end
 
-	local menuBuf = createMenuBuffer(filename)
+	-- Build sections (GLOBAL first, then BRANCH)
+	menu_model = build_menu_model(filename)
 
-	local window_config = M.getWindowConfig()
+	-- Build actions “handbook” and append to lines *before* rendering buffer
+	local action_lines = build_actions_lines(filename)
+	for _, l in ipairs(action_lines) do
+		table.insert(menu_model.lines, l)
+	end
 
-	local win = vim.api.nvim_open_win(menuBuf, true, window_config)
+	-- Compute window size from FINAL content (with padding)
+	local width, height = compute_window_size(menu_model.lines)
 
-	local mappings = config.getState("mappings")
+	-- Create buffer & window
+	local menuBuf = vim.api.nvim_create_buf(false, true)
+	vim.b[menuBuf].filename = filename
+	vim.b[menuBuf].arrow_current_mode = ""
 
-	local separate_save_and_remove = config.getState("separate_save_and_remove")
+	local ui_config = config.getState("ui") or {}
 
+	local final_config = {
+		relative = ui_config.relative or "editor",
+		style = ui_config.style or "minimal",
+		border = ui_config.border or "single",
+		width = width,
+		height = height,
+	}
+
+	-- Positioning after we know height/width (no user overrides of size)
+	local win_width = vim.o.columns
+	local win_height = vim.o.lines
+	local row, col
+	local position = ui_config.position or "center"
+	if position == "center" then
+		row = math.floor((win_height - final_config.height) / 2)
+		col = math.floor((win_width - final_config.width) / 2)
+	elseif position == "top-left" then
+		row = 0
+		col = 0
+	elseif position == "top-center" then
+		row = 0
+		col = math.floor((win_width - final_config.width) / 2)
+	elseif position == "top-right" then
+		row = 0
+		col = win_width - final_config.width
+	elseif position == "middle-left" then
+		row = math.floor((win_height - final_config.height) / 2)
+		col = 0
+	elseif position == "middle-right" then
+		row = math.floor((win_height - final_config.height) / 2)
+		col = win_width - final_config.width
+	elseif position == "bottom-left" then
+		row = win_height - final_config.height
+		col = 0
+	elseif position == "bottom-center" then
+		row = win_height - final_config.height
+		col = math.floor((win_width - final_config.width) / 2)
+	elseif position == "bottom-right" then
+		row = win_height - final_config.height
+		col = win_width - final_config.width
+	else
+		row = math.floor((win_height - final_config.height) / 2)
+		col = math.floor((win_width - final_config.width) / 2)
+	end
+	final_config.row = (ui_config.row and ui_config.row ~= "auto") and ui_config.row or row
+	final_config.col = (ui_config.col and ui_config.col ~= "auto") and ui_config.col or col
+
+	local win = vim.api.nvim_open_win(menuBuf, true, final_config)
+
+	-- Write final lines to buffer now
+	vim.api.nvim_buf_set_option(menuBuf, "modifiable", true)
+	vim.api.nvim_buf_set_lines(menuBuf, 0, -1, false, menu_model.lines)
+	vim.api.nvim_buf_set_option(menuBuf, "modifiable", false)
+	vim.api.nvim_buf_set_option(menuBuf, "buftype", "nofile")
+
+	-- Make bottom pad visually clean (no ~)
+	local prev_fill = vim.wo.fillchars or ""
+	if not prev_fill:match("eob:") then
+		vim.wo.fillchars = (prev_fill == "" and "eob: ") or (prev_fill .. ",eob: ")
+	end
+
+	-- Entry selection keymaps
 	local menuKeymapOpts = { noremap = true, silent = true, buffer = menuBuf, nowait = true }
+	for _, e in ipairs(menu_model.entries) do
+		vim.keymap.set("n", e.key, function()
+			if vim.b.arrow_current_mode == "delete_mode" then
+				persist.remove(e.filename) -- removes from permanent if present, else from branch
+				closeMenu()
+				vim.schedule(function()
+					M.openMenu(call_buffer)
+				end)
+			else
+				open_target(e.filename)
+			end
+		end, menuKeymapOpts)
+	end
 
+	-- Actions (save/toggle/etc) keymaps
+	local mappings = config.getState("mappings")
 	vim.keymap.set("n", config.getState("leader_key"), closeMenu, menuKeymapOpts)
 
 	local buffer_leader_key = config.getState("buffer_leader_key")
 	if buffer_leader_key then
 		vim.keymap.set("n", buffer_leader_key, function()
 			closeMenu()
-
 			vim.schedule(function()
 				require("arrow.buffer_ui").openMenu(call_buffer)
 			end)
@@ -495,18 +580,14 @@ function M.openMenu(bufnr)
 		persist.open_cache_file()
 	end, menuKeymapOpts)
 
-	if separate_save_and_remove then
+	if config.getState("separate_save_and_remove") then
 		vim.keymap.set("n", mappings.toggle, function()
-			filename = filename or utils.get_current_buffer_path()
-
-			persist.save(filename)
+			persist.save(filename or utils.get_current_buffer_path())
 			closeMenu()
 		end, menuKeymapOpts)
 
 		vim.keymap.set("n", mappings.remove, function()
-			filename = filename or utils.get_current_buffer_path()
-
-			persist.remove(filename)
+			persist.remove(filename or utils.get_current_buffer_path())
 			closeMenu()
 		end, menuKeymapOpts)
 	else
@@ -521,6 +602,13 @@ function M.openMenu(bufnr)
 		closeMenu()
 	end, menuKeymapOpts)
 
+	if mappings.toggle_permanent then
+		vim.keymap.set("n", mappings.toggle_permanent, function()
+			persist.toggle_permanent(filename or utils.get_current_buffer_path())
+			closeMenu()
+		end, menuKeymapOpts)
+	end
+
 	vim.keymap.set("n", mappings.next_item, function()
 		closeMenu()
 		persist.next()
@@ -534,38 +622,21 @@ function M.openMenu(bufnr)
 	vim.keymap.set("n", "<Esc>", closeMenu, menuKeymapOpts)
 
 	vim.keymap.set("n", mappings.delete_mode, function()
-		if vim.b.arrow_current_mode == "delete_mode" then
-			vim.b.arrow_current_mode = ""
-		else
-			vim.b.arrow_current_mode = "delete_mode"
-		end
-
-		renderBuffer(menuBuf)
+		vim.b.arrow_current_mode = (vim.b.arrow_current_mode == "delete_mode") and "" or "delete_mode"
 		render_highlights(menuBuf)
 	end, menuKeymapOpts)
 
 	vim.keymap.set("n", mappings.open_vertical, function()
-		if vim.b.arrow_current_mode == "vertical_mode" then
-			vim.b.arrow_current_mode = ""
-		else
-			vim.b.arrow_current_mode = "vertical_mode"
-		end
-
-		renderBuffer(menuBuf)
+		vim.b.arrow_current_mode = (vim.b.arrow_current_mode == "vertical_mode") and "" or "vertical_mode"
 		render_highlights(menuBuf)
 	end, menuKeymapOpts)
 
 	vim.keymap.set("n", mappings.open_horizontal, function()
-		if vim.b.arrow_current_mode == "horizontal_mode" then
-			vim.b.arrow_current_mode = ""
-		else
-			vim.b.arrow_current_mode = "horizontal_mode"
-		end
-
-		renderBuffer(menuBuf)
+		vim.b.arrow_current_mode = (vim.b.arrow_current_mode == "horizontal_mode") and "" or "horizontal_mode"
 		render_highlights(menuBuf)
 	end, menuKeymapOpts)
 
+	-- Cursor & highlight behavior
 	vim.api.nvim_set_hl(0, "ArrowCursor", { nocombine = true, blend = 100 })
 	vim.opt.guicursor:append("a:ArrowCursor/ArrowCursor")
 
@@ -574,8 +645,6 @@ function M.openMenu(bufnr)
 		desc = "Disable Cursor",
 		once = true,
 		callback = function()
-			current_index = 0
-
 			vim.cmd("highlight clear ArrowCursor")
 			vim.schedule(function()
 				vim.opt.guicursor:remove("a:ArrowCursor/ArrowCursor")
@@ -586,10 +655,8 @@ function M.openMenu(bufnr)
 	-- disable cursorline for this buffer
 	vim.wo.cursorline = false
 
-	vim.api.nvim_set_current_win(win)
-
+	-- Render highlights after content is in place
 	render_highlights(menuBuf)
 end
 
--- Command to trigger the menu
 return M

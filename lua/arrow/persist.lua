@@ -4,25 +4,42 @@ local config = require("arrow.config")
 local utils = require("arrow.utils")
 local git = require("arrow.git")
 
-local function save_key()
+-- Internal split storage
+M._branch_filenames = {}
+M._permanent_filenames = {}
+
+-- Compute the base key (root for the repo/cwd), independent of branch, normalized
+local function base_key()
+	if config.getState("global_bookmarks") == true then
+		return "global"
+	end
+	return utils.normalize_path_to_filename(config.getState("save_key_cached"))
+end
+
+-- Compute the branch-aware key (normalized: base + "-" + branch)
+local function branch_key()
 	if config.getState("global_bookmarks") == true then
 		return "global"
 	end
 
 	if config.getState("separate_by_branch") then
 		local branch = git.refresh_git_branch()
-
-		if branch then
+		if branch and branch ~= "" then
+			-- IMPORTANT: normalize base + "-" + branch to avoid "/" issues
 			return utils.normalize_path_to_filename(config.getState("save_key_cached") .. "-" .. branch)
 		end
 	end
 
-	return utils.normalize_path_to_filename(config.getState("save_key_cached"))
+	return base_key()
+end
+
+-- Backward‑compatible key (used by original cache file)
+local function save_key()
+	return branch_key()
 end
 
 local function cache_file_path()
 	local save_path = config.getState("save_path")()
-
 	save_path = save_path:gsub("/$", "")
 
 	if vim.fn.isdirectory(save_path) == 0 then
@@ -32,36 +49,115 @@ local function cache_file_path()
 	return save_path .. "/" .. save_key()
 end
 
+-- Path for branch‑independent (permanent) bookmarks.
+-- Only meaningful when we separate by branch and not using global storage.
+local function permanent_cache_file_path()
+	if config.getState("global_bookmarks") == true then
+		return nil
+	end
+	if config.getState("separate_by_branch") ~= true then
+		return nil
+	end
+
+	local save_path = config.getState("save_path")()
+	save_path = save_path:gsub("/$", "")
+
+	if vim.fn.isdirectory(save_path) == 0 then
+		vim.fn.mkdir(save_path, "p")
+	end
+
+	-- base_key() is normalized already
+	return save_path .. "/" .. (base_key() .. ".permanent")
+end
+
 local function notify()
 	vim.api.nvim_exec_autocmds("User", {
 		pattern = "ArrowUpdate",
 	})
 end
 
-vim.g.arrow_filenames = {}
+vim.g.arrow_filenames = vim.g.arrow_filenames or {}
+-- Lookup set for permanent entries: filename -> true (used by UI)
+vim.g.arrow_permanent_lookup = vim.g.arrow_permanent_lookup or {}
+
+-- Helpers to be tolerant with "./" prefix when relative_path = true
+local function maybe_prefix_dot(p)
+	if config.getState("relative_path") == true and config.getState("global_bookmarks") == false then
+		if not p:match("^%./") and not utils.string_contains_whitespace(p) then
+			return "./" .. p
+		end
+	end
+	return p
+end
+
+local function find_in_list(list, filename)
+	local want = maybe_prefix_dot(filename)
+	for i, name in ipairs(list) do
+		local n = maybe_prefix_dot(name)
+		if n == want then
+			return i
+		end
+	end
+	return nil
+end
+
+local function write_lines(path, arr)
+	if not path then
+		return
+	end
+	local content = vim.fn.join(arr, "\n")
+	local lines = vim.fn.split(content, "\n")
+	vim.fn.writefile(lines, path)
+end
+
+local function cache_files()
+	-- branch/current list
+	write_lines(cache_file_path(), M._branch_filenames)
+	-- permanent list (only used when separate_by_branch)
+	write_lines(permanent_cache_file_path(), M._permanent_filenames)
+end
+
+-- Combine with branch first, then permanent (so 1–9 map nicely to locals)
+local function combine_unique(branch, permanent)
+	local combined, seen = {}, {}
+	for _, v in ipairs(branch or {}) do
+		if not seen[v] then
+			table.insert(combined, v)
+			seen[v] = true
+		end
+	end
+	for _, v in ipairs(permanent or {}) do
+		if not seen[v] then
+			table.insert(combined, v)
+			seen[v] = true
+		end
+	end
+	return combined
+end
 
 function M.save(filename)
 	if not M.is_saved(filename) then
-		local new_table = vim.g.arrow_filenames
-		table.insert(new_table, filename)
-		vim.g.arrow_filenames = new_table
-
-		M.cache_file()
+		table.insert(M._branch_filenames, filename)
+		cache_files()
 		M.load_cache_file()
 	end
 	notify()
 end
 
 function M.remove(filename)
-	local index = M.is_saved(filename)
-	if index then
-		local new_table = vim.g.arrow_filenames
-		table.remove(new_table, index)
-		vim.g.arrow_filenames = new_table
-
-		M.cache_file()
-		M.load_cache_file()
+	-- Prefer removing from permanent list; otherwise remove from branch list
+	local idx_perm = find_in_list(M._permanent_filenames, filename)
+	if idx_perm then
+		table.remove(M._permanent_filenames, idx_perm)
+	else
+		local idx_branch = find_in_list(M._branch_filenames, filename)
+		if idx_branch then
+			table.remove(M._branch_filenames, idx_branch)
+		end
 	end
+
+	cache_files()
+	M.load_cache_file()
 	notify()
 end
 
@@ -79,9 +175,10 @@ function M.toggle(filename)
 	notify()
 end
 
+-- Clear only the branch‑scoped list. Permanent bookmarks are kept.
 function M.clear()
-	vim.g.arrow_filenames = {}
-	M.cache_file()
+	M._branch_filenames = {}
+	cache_files()
 	M.load_cache_file()
 	notify()
 end
@@ -105,27 +202,45 @@ function M.is_saved(filename)
 	return nil
 end
 
-function M.load_cache_file()
-	local cache_path = cache_file_path()
-
-	if vim.fn.filereadable(cache_path) == 0 then
-		vim.g.arrow_filenames = {}
-
-		return
-	end
-
-	local success, data = pcall(vim.fn.readfile, cache_path)
-	if success then
-		vim.g.arrow_filenames = data
-	else
-		vim.g.arrow_filenames = {}
-	end
+-- Is the filename in the permanent list?
+function M.is_saved_permanent(filename)
+	return find_in_list(M._permanent_filenames, filename)
 end
 
+function M.load_cache_file()
+	local branch_path = cache_file_path()
+	local perm_path = permanent_cache_file_path()
+
+	-- Load branch/current list
+	if vim.fn.filereadable(branch_path) == 0 then
+		M._branch_filenames = {}
+	else
+		local ok, data = pcall(vim.fn.readfile, branch_path)
+		M._branch_filenames = (ok and data) or {}
+	end
+
+	-- Load permanent list (only when used)
+	if perm_path and vim.fn.filereadable(perm_path) == 1 then
+		local okp, datap = pcall(vim.fn.readfile, perm_path)
+		M._permanent_filenames = (okp and datap) or {}
+	else
+		M._permanent_filenames = {}
+	end
+
+	-- Merge (branch first), de-duplicated
+	vim.g.arrow_filenames = combine_unique(M._branch_filenames, M._permanent_filenames)
+
+	-- Build lookup set for permanent items only
+	local perm_lookup = {}
+	for _, v in ipairs(M._permanent_filenames) do
+		perm_lookup[v] = true
+	end
+	vim.g.arrow_permanent_lookup = perm_lookup
+end
+
+-- Backward‑compatible API: now writes both underlying files
 function M.cache_file()
-	local content = vim.fn.join(vim.g.arrow_filenames, "\n")
-	local lines = vim.fn.split(content, "\n")
-	vim.fn.writefile(lines, cache_file_path())
+	cache_files()
 end
 
 function M.go_to(index)
@@ -208,7 +323,7 @@ function M.open_cache_file()
 	local row = math.ceil((vim.o.lines - height) / 2)
 	local col = math.ceil((vim.o.columns - width) / 2)
 
-	local border = config.getState("window").border
+	local border = (config.getState("window") or {}).border -- keep legacy field tolerant
 
 	local opts = {
 		style = "minimal",
@@ -248,6 +363,58 @@ function M.open_cache_file()
 	vim.cmd("setlocal nu")
 
 	return bufnr, winid
+end
+
+-- Public helpers for permanent bookmarks ---------------------------------
+
+function M.save_permanent(filename)
+	-- If not in split mode, saving permanent is the same as normal save
+	if config.getState("separate_by_branch") ~= true or config.getState("global_bookmarks") == true then
+		return M.save(filename)
+	end
+
+	if not M.is_saved_permanent(filename) then
+		table.insert(M._permanent_filenames, filename)
+		-- ensure we don't keep a duplicate in the branch list
+		local idx_branch = find_in_list(M._branch_filenames, filename)
+		if idx_branch then
+			table.remove(M._branch_filenames, idx_branch)
+		end
+		cache_files()
+		M.load_cache_file()
+		notify()
+	end
+end
+
+function M.remove_permanent(filename)
+	if config.getState("separate_by_branch") ~= true or config.getState("global_bookmarks") == true then
+		return
+	end
+	local idx = find_in_list(M._permanent_filenames, filename)
+	if idx then
+		table.remove(M._permanent_filenames, idx)
+		cache_files()
+		M.load_cache_file()
+		notify()
+	end
+end
+
+function M.toggle_permanent(filename)
+	filename = filename or utils.get_current_buffer_path()
+	if M.is_saved_permanent(filename) then
+		M.remove_permanent(filename)
+	else
+		M.save_permanent(filename)
+	end
+end
+
+-- Expose raw lists for UI
+function M.get_branch_list()
+	return vim.deepcopy(M._branch_filenames)
+end
+
+function M.get_permanent_list()
+	return vim.deepcopy(M._permanent_filenames)
 end
 
 return M

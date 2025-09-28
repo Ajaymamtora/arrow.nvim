@@ -32,21 +32,19 @@ function M.setup(opts)
 		open_vertical = "v",
 		open_horizontal = "-",
 		quit = "q",
+		toggle_permanent = "P", -- toggle branch-independent bookmark
 		remove = "x",
 		next_item = "]",
 		prev_item = "[",
 	}
 
+	-- Size is now content-driven; keep only behavior/position styling
 	local default_ui_config = {
 		relative = "editor",
-		width = "auto",
-		height = "auto",
 		row = "auto",
 		col = "auto",
 		style = "minimal",
 		border = "single",
-		max_width = 80,
-		max_height = 20,
 		position = "center",
 	}
 
@@ -94,7 +92,12 @@ function M.setup(opts)
 	config.setState("save_key_cached", config.getState("save_key")())
 
 	if leader_key then
-		vim.keymap.set("n", leader_key, ui.openMenu, { noremap = true, silent = true, nowait = true, desc = "Arrow File Mappings" })
+		vim.keymap.set(
+			"n",
+			leader_key,
+			ui.openMenu,
+			{ noremap = true, silent = true, nowait = true, desc = "Arrow File Mappings" }
+		)
 	end
 
 	if buffer_leader_key then
