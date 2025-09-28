@@ -204,7 +204,7 @@ local function build_menu_model(filename_current_buf)
 	table.insert(model.lines, "")
 
 	-- Global section FIRST -----------------------------------------------------
-	table.insert(model.lines, "   Global bookmarks")
+	table.insert(model.lines, "   Global bookmarks ")
 	model.header.global.header = #model.lines
 	table.insert(model.lines, "   ----------------")
 	model.header.global.underline = #model.lines
@@ -241,9 +241,9 @@ local function build_menu_model(filename_current_buf)
 	table.insert(model.lines, "") -- spacer
 
 	-- Branch (local) section SECOND -------------------------------------------
-	table.insert(model.lines, "   Local (branch) bookmarks")
+	table.insert(model.lines, "   Local bookmarks ")
 	model.header.branch.header = #model.lines
-	table.insert(model.lines, "   ------------------------")
+	table.insert(model.lines, "   ----------------")
 	model.header.branch.underline = #model.lines
 
 	if #branch_list == 0 then
