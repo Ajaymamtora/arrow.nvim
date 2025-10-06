@@ -130,6 +130,14 @@ vim.keymap.set("n", "L", require("arrow.persist").next)
 vim.keymap.set("n", "<C-s>", require("arrow.persist").toggle)
 ```
 
+## Jumping to bookmarks by index
+
+You can create keymaps to jump to a specific bookmark by its index number.
+
+```lua
+vim.keymap.set("n", "<M-1>", function() require('arrow.bookmark_jump').open_bookmark_by_number(1) end, { desc = "Jump to bookmark 1" })
+vim.keymap.set("n", "<M-2>", function() require('arrow.bookmark_jump').open_bookmark_by_number(2) end, { desc = "Jump to bookmark 2" })
+```
 
 ## Statusline
 
