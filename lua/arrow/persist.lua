@@ -1,3 +1,4 @@
+-- lua/arrow/persist.lua
 local M = {}
 
 local config = require("arrow.config")
@@ -292,6 +293,99 @@ function M.previous()
 
 	M.go_to(previous_index)
 end
+
+-- ===== Scoped navigation (local-only or global/permanent-only) ==============
+
+-- Internal helper to navigate within a specific list
+local function _navigate_scoped(list, forward)
+	git.refresh_git_branch()
+
+	if not list or #list == 0 then
+		return
+	end
+
+	-- Choose the comparable filename for this mode (respects relative_path)
+	local filename
+	if config.getState("global_bookmarks") == true then
+		filename = vim.fn.expand("%:p")
+	else
+		filename = utils.get_current_buffer_path()
+	end
+
+	-- Find current position inside the provided list
+	local cur_idx = find_in_list(list, filename)
+
+	-- Compute target index (wrap around)
+	local target_idx
+	if cur_idx then
+		if forward then
+			target_idx = (cur_idx % #list) + 1
+		else
+			target_idx = ((cur_idx - 2) % #list) + 1
+		end
+	else
+		target_idx = forward and 1 or #list
+	end
+
+	local target = list[target_idx]
+	if not target then
+		return
+	end
+
+	-- Try to reuse merged navigation when possible
+	local merged_idx = M.is_saved(target)
+	if merged_idx then
+		M.go_to(merged_idx)
+		return
+	end
+
+	-- Fallback open (very unlikely, but keeps behavior consistent)
+	if
+		config.getState("global_bookmarks") == true
+		or config.getState("save_key_name") == "cwd"
+		or config.getState("save_key_name") == "git_root_bare"
+	then
+		vim.cmd(":edit " .. target)
+	else
+		vim.cmd(":edit " .. config.getState("save_key_cached") .. "/" .. target)
+	end
+end
+
+-- Choose which list represents "global" depending on configuration.
+local function _get_global_list()
+	-- When global_bookmarks = true, the only list we have is the branch/current file.
+	-- Treat "global" navigation as the same as the main list to avoid a no-op.
+	if config.getState("global_bookmarks") == true then
+		return M._branch_filenames
+	end
+	return M._permanent_filenames
+end
+
+-- Public scoped navigations ---------------------------------------------------
+
+-- Local/branch-only
+function M.next_local()
+	_navigate_scoped(M._branch_filenames, true)
+end
+
+function M.previous_local()
+	_navigate_scoped(M._branch_filenames, false)
+end
+
+-- Global/permanent-only (what the UI shows under “Global bookmarks”)
+function M.next_global()
+	_navigate_scoped(_get_global_list(), true)
+end
+
+function M.previous_global()
+	_navigate_scoped(_get_global_list(), false)
+end
+
+-- Optional aliases for taste
+M.next_branch = M.next_local
+M.previous_branch = M.previous_local
+M.next_permanent = M.next_global
+M.previous_permanent = M.previous_global
 
 function M.open_cache_file()
 	git.refresh_git_branch()
